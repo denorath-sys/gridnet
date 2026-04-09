@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="media/logo-cyan.svg" width="480">
+</p>
+
 # GRIDNET — Powerline Mesh Terminal
 
 > *Communicate over the power grid. No internet. No GSM. No servers.*
