@@ -10,7 +10,7 @@ import random
 
 from .address import Address
 from .medium import Medium
-from .node import JOIN_LISTEN_DELAY, LISTEN_DELAY, LISTEN_JITTER, InverterState, Node
+from .node import JOIN_LISTEN_DELAY, LISTEN_DELAY, LISTEN_JITTER, ROUTE_ADVERTISE_INTERVAL, InverterState, Node
 from .simulator import Simulator
 
 # Larger than LISTEN_JITTER's spread, so a manual stagger of this size always
@@ -45,6 +45,30 @@ def scenario_multihop_flood():
     a.send_message(c.address, b"is the shop open today?")
     sim.run(10)
     return sim, {"a": a, "relay": relay, "c": c}
+
+
+def scenario_routing():
+    """A -- seg1 -- B -- seg2 -- C -- seg3 -- D, a 4-node/3-hop chain. ROUTE
+    is a distance-vector protocol (docs/protocol.md REV 0.5): each
+    advertisement round only propagates one hop further, so full end-to-end
+    convergence (A learning D is 3 hops away, via B) takes several rounds —
+    watch the "learned route" / "updated route" log lines tighten each
+    ROUTE_ADVERTISE_INTERVAL."""
+    sim = Simulator()
+    seg1 = Medium("seg1", bitrate_bps=4800)
+    seg2 = Medium("seg2", bitrate_bps=4800)
+    seg3 = Medium("seg3", bitrate_bps=4800)
+
+    a = Node(sim, Address.parse("01.03.07.11"), plc_medium=seg1)
+    b = Node(sim, Address.parse("01.03.07.12"), plc_medium=seg1)
+    b.attach_wifi(seg2)
+    c = Node(sim, Address.parse("01.03.07.13"), plc_medium=seg2)
+    c.attach_wifi(seg3)
+    d = Node(sim, Address.parse("01.03.07.14"), plc_medium=seg3)
+
+    sim.run(ROUTE_ADVERTISE_INTERVAL * 4)
+    sim.log(f"--- A's routing table: {[(str(k), v.hop_count, str(v.next_hop)) for k, v in a.routing_table.items()]} ---")
+    return sim, {"a": a, "b": b, "c": c, "d": d}
 
 
 def scenario_store_and_forward():
@@ -171,6 +195,7 @@ def scenario_channel_fallback():
 SCENARIOS = {
     "basic-exchange": scenario_basic_exchange,
     "multihop-flood": scenario_multihop_flood,
+    "routing": scenario_routing,
     "store-and-forward": scenario_store_and_forward,
     "master-election": scenario_master_election,
     "master-election-worst-case": scenario_master_election_worst_case,

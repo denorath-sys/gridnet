@@ -23,12 +23,33 @@ TypeCodeDescriptionMSG0x01Standard messageACK0x02Delivery acknowledgementBROADCA
 
 Mesh Routing
 
-Every device maintains a neighbor table (address, hop count, last seen)
+Every device maintains a neighbor table (address, hop count, last seen) — populated by periodic ROUTE broadcasts, see "ROUTE Packet" below
 Unknown destination: flooded to all neighbors, each device repeats once
 Store-and-forward: if destination is unreachable, message is stored for up to 7 days
 Every device acts as a repeater automatically
 CSMA/CA collision avoidance: listen before transmit, back off if channel busy
 
+ROUTE Packet (REV 0.5)
+
+Distance-vector routing table advertisement — this is how the neighbor table above actually learns hop counts beyond 1, which REV 0.4 left unspecified. Unlike MSG/APP_DATA, a ROUTE packet is never flooded/relayed across the mesh; instead every device periodically re-broadcasts its own table (already hop-incremented) on its own schedule, and the information spreads outward one hop per advertisement cycle — the same mechanism RIP uses.
+
+ctypedef struct {
+    uint8_t  type;          // 0x04 = ROUTE
+    uint8_t  src[4];         // Advertiser's address
+    uint16_t seq;             // Sequence number
+    RouteEntry entries[];      // One per known destination, packed back-to-back
+} RoutePacket;
+
+ctypedef struct {
+    uint8_t  address[4];    // Destination address
+    uint8_t  hop_count;      // Hops from the advertiser to this destination (0 = the advertiser itself)
+} RouteEntry;                // 5 bytes per entry — up to 51 entries fit in one 256-byte payload
+
+Every device always includes itself at hop_count 0. On receipt, a device compares each entry's (hop_count + 1) against its own table and keeps the lower value, recording the sender as next_hop. A device discards any incoming entry whose address is its own — the minimal loop-prevention this simplified distance-vector scheme relies on (no split-horizon/poison-reverse).
+
+Hop counts are capped at 15 (RIP-style "infinity"); entries at or above the cap are dropped rather than propagated further, bounding runaway counts across a brief segment partition/reconnect. An entry not refreshed within 3 advertisement intervals (180s) is considered stale and dropped from that device's own next advertisement — the same "3 missed heartbeats" convention docs/inverter-master.md uses for MASTER_TIMEOUT.
+
+Advertisement interval: 60 seconds. Much longer than MASTER_ALIVE's 10s, deliberately: a full table (up to 255 bytes of payload) costs meaningfully more airtime than a 9-byte heartbeat on a 2.4–9.6kbps link — at 2.4kbps, one full-size ROUTE broadcast occupies the channel for roughly 900ms, so every device doing this too often would eat directly into the bandwidth available for MSG traffic. Routing information is also far less time-critical than the inverter master heartbeat, which gates a physical 24V injection decision.
 
 Automatic Channel Selection
 Priority order, evaluated continuously:
@@ -75,4 +96,4 @@ Broadcast requires explicit permission flag
 Filesystem isolation: each app can only access its own directory
 
 
-Last updated: 2026 — REV 0.4
+Last updated: 2026 — REV 0.5

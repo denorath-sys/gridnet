@@ -40,6 +40,13 @@ DEDUP_WINDOW = 15.0
 OUTBOX_RETRY_INTERVAL = 30.0
 OUTBOX_EXPIRY = 7 * 24 * 3600.0  # 7 days, per docs/protocol.md
 
+# --- ROUTE / distance-vector timing (docs/protocol.md REV 0.5 "ROUTE Packet") ---
+ROUTE_ADVERTISE_INTERVAL = 60.0  # much longer than MASTER_ALIVE: a full table costs real airtime
+ROUTE_ENTRY_SIZE = 5  # 4-byte address + 1-byte hop count
+MAX_ROUTE_ENTRIES = 256 // ROUTE_ENTRY_SIZE  # fits in one packet's MAX_PAYLOAD
+MAX_ROUTE_HOPS = 15  # RIP-style "infinity" — bounds runaway counts across a brief partition
+ROUTE_STALE = 3 * ROUTE_ADVERTISE_INTERVAL  # "3 missed heartbeats", same convention as MASTER_TIMEOUT
+
 
 class InverterState(IntEnum):
     GRID_ON = 0
@@ -62,6 +69,25 @@ class OutboxEntry:
     attempts: int = 0
 
 
+@dataclass(eq=False)
+class RouteEntry:
+    hop_count: int
+    next_hop: Address
+    last_seen: float
+
+
+def _pack_route_entries(entries) -> bytes:
+    return b"".join(addr.to_bytes() + struct.pack("B", hop_count) for addr, hop_count in entries)
+
+
+def _unpack_route_entries(payload: bytes):
+    usable = len(payload) - (len(payload) % ROUTE_ENTRY_SIZE)
+    for offset in range(0, usable, ROUTE_ENTRY_SIZE):
+        addr = Address.from_bytes(payload[offset : offset + 4])
+        hop_count = payload[offset + 4]
+        yield addr, hop_count
+
+
 class Node:
     def __init__(
         self,
@@ -81,11 +107,18 @@ class Node:
         self.grid_on = True
         self.battery_pct = battery_pct
         self._rng = rng or random.Random()
+        # Deliberately a *separate* RNG from self._rng: self._rng is also
+        # used for inverter-master listen-delay jitter (grid_lost/cold_join),
+        # and callers frequently seed it for reproducible tests. Drawing from
+        # the same stream here would consume state ahead of that jitter draw
+        # and silently shift its value depending on unrelated ROUTE timing.
+        self._route_rng = random.Random()
 
         self.outbox: List[OutboxEntry] = []
         self.inbox: List[Packet] = []  # application-delivered messages, for tests/inspection
         self.seen: Dict[tuple, float] = {}
         self.known_nodes: Dict[Address, float] = {}  # PLC-segment neighbors, for master candidacy
+        self.routing_table: Dict[Address, RouteEntry] = {}  # multi-hop, from ROUTE advertisements
         self._seq = itertools.count(1)
 
         self.inverter_state = InverterState.GRID_ON
@@ -97,6 +130,12 @@ class Node:
             self.plc_medium.attach(self.id, lambda frame: self._on_receive_raw(frame, self.plc_medium))
         if self.wifi_medium is not None:
             self.wifi_medium.attach(self.id, lambda frame: self._on_receive_raw(frame, self.wifi_medium))
+
+        # Staggered first advertisement (uniform over a full interval) so
+        # devices that boot together don't all broadcast their (initially
+        # empty) table in lockstep forever after; every advertisement after
+        # that is a fixed ROUTE_ADVERTISE_INTERVAL from the previous one.
+        self.sim.schedule(self._route_rng.uniform(0, ROUTE_ADVERTISE_INTERVAL), self._advertise_routes)
 
     def __repr__(self) -> str:
         return f"Node({self.address})"
@@ -192,6 +231,12 @@ class Node:
             if medium is self.plc_medium:
                 self._on_master_resign(pkt)
             return
+        if pkt.type == MessageType.ROUTE:
+            # Like MASTER_ALIVE/RESIGN: processed locally, never flood-relayed.
+            # Unlike them, not restricted to the PLC medium — routing spans
+            # both PLC segments and WiFi mesh bridges.
+            self._on_route(pkt)
+            return
 
         deliver_to_app = pkt.dst == self.address or pkt.dst == BROADCAST
         if deliver_to_app:
@@ -213,6 +258,51 @@ class Node:
         for medium in (self.plc_medium, self.wifi_medium):
             if medium is not None and medium is not arrived_via:
                 medium.transmit(self.sim, self.id, pkt.encode())
+
+    # ------------------------------------------------------------------ #
+    # ROUTE / distance-vector routing (docs/protocol.md REV 0.5)
+    # ------------------------------------------------------------------ #
+
+    def _active_routes(self):
+        """(address, hop_count) pairs still fresh enough to advertise —
+        excludes anything not refreshed within ROUTE_STALE or that's already
+        hit the hop cap (advertising it further would only push it over)."""
+        now = self.sim.now
+        return [
+            (addr, entry.hop_count)
+            for addr, entry in self.routing_table.items()
+            if now - entry.last_seen <= ROUTE_STALE and entry.hop_count < MAX_ROUTE_HOPS
+        ]
+
+    def _advertise_routes(self) -> None:
+        entries = [(self.address, 0)] + sorted(self._active_routes(), key=lambda e: e[1])
+        entries = entries[:MAX_ROUTE_ENTRIES]
+        payload = _pack_route_entries(entries)
+        for medium in (self.plc_medium, self.wifi_medium):
+            if medium is not None:
+                seq = next(self._seq)
+                pkt = Packet(src=self.address, dst=BROADCAST, seq=seq, type=MessageType.ROUTE, payload=payload)
+                medium.transmit(self.sim, self.id, pkt.encode())
+        self.sim.schedule(ROUTE_ADVERTISE_INTERVAL, self._advertise_routes)
+
+    def _on_route(self, pkt: Packet) -> None:
+        now = self.sim.now
+        for addr, hop_count in _unpack_route_entries(pkt.payload):
+            if addr == self.address:
+                continue  # a route back to myself — discard (basic loop suppression)
+            candidate_hops = hop_count + 1
+            if candidate_hops >= MAX_ROUTE_HOPS:
+                continue
+            existing = self.routing_table.get(addr)
+            if existing is None or candidate_hops <= existing.hop_count or existing.next_hop == pkt.src:
+                if existing is None:
+                    self.sim.log(f"{self.address}: learned route to {addr} via {pkt.src} ({candidate_hops} hop(s))")
+                elif candidate_hops != existing.hop_count or existing.next_hop != pkt.src:
+                    self.sim.log(
+                        f"{self.address}: updated route to {addr}: "
+                        f"{existing.hop_count} hop(s) via {existing.next_hop} -> {candidate_hops} hop(s) via {pkt.src}"
+                    )
+                self.routing_table[addr] = RouteEntry(hop_count=candidate_hops, next_hop=pkt.src, last_seen=now)
 
     # ------------------------------------------------------------------ #
     # Physical channel events
