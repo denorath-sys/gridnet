@@ -1,8 +1,14 @@
 GRIDNET — Firmware
 
-Status: In Development
-Firmware development begins after hardware prototype is complete and validated.
+Status: Not started. Firmware development begins after the hardware
+prototype is complete and validated — see the top-level README's Project
+Status table.
 
+Two Python prototypes already exist and inform this planned structure:
+tools/protocol-sim/ validates the protocol/routing stack that src/router/
+and src/channel/ will implement, and tools/forth-vm/ validates the Forth
+VM that src/forth/ will implement. Neither is a substitute for real
+firmware — see their own READMEs for what's actually been tested.
 
 Planned Structure
 firmware/

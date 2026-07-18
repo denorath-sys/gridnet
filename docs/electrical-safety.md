@@ -36,10 +36,11 @@ GRIDNET's 24V AC, 100mA injection is within these limits.
 IEC 60479
 Classifies 24V AC as non-hazardous under normal dry conditions. Full compliance with SELV (Safety Extra-Low Voltage) definition.
 
-Inverter Master Protocol — Preventing Voltage Conflicts
+Inverter Master Protocol — Preventing Voltage Conflicts (REV 0.5)
 If multiple GRIDNET devices on the same segment all inject simultaneously, the signals would interfere with each other. The inverter master protocol prevents this:
 Grid power fails
-  → All devices wait 2 seconds and listen
+  → Devices that witnessed the failure directly wait 2 seconds + jitter (0–500ms) and listen
+  → Devices powering on or rejoining afterward wait a full ~12-second heartbeat cycle instead — they can't assume no master exists just because they haven't heard one yet
   → Is 24V AC present on the wire?
       YES → Another device is already injecting → stay passive
       NO  → Become master → start injecting
@@ -48,7 +49,7 @@ Master device:
   → Broadcasts MASTER_ALIVE packet every 10 seconds
   → If no MASTER_ALIVE for 30 seconds:
       → Lowest-address active device becomes new master
-Result: Exactly one device injects at any time. Maximum current on the wire: 100mA.
+Result: Exactly one device injects at any time, with split-brain detection (see docs/inverter-master.md's "Failure Scenarios") as a safety net for the rare case where two devices' jitter draws genuinely tie. Maximum current on the wire: 100mA. See that document's "Design Notes — REV History" for why the jitter and the two different listen delays were added.
 
 Protection Circuit
 The adapter includes a three-layer protection circuit that handles:
@@ -90,7 +91,7 @@ The design complies with basic insulation requirements of IEC 60950/62368
 
 
 Comparison With Existing Powerline Technologies
-TechnologyFrequencyVoltageCurrentIn Use SinceHomePlug AV1.8–30 MHz~1V (signal)< 1mA2001G.hn2–100 MHz~1V (signal)< 1mA2009Smart meter (DLMS)9–95 kHz~1V (signal)< 1mA1990sGRIDNET (inverter mode)9–148 kHz24V100mA—
+TechnologyFrequencyVoltageCurrentIn Use SinceHomePlug AV1.8–30 MHz~1V (signal)< 1mA2005 (HomePlug AV; the original 14Mbps HomePlug 1.0 was 2001)G.hn2–100 MHz~1V (signal)< 1mA2009Smart meter (DLMS)9–95 kHz~1V (signal)< 1mA1990sGRIDNET (inverter mode)9–148 kHz24V100mA—
 GRIDNET's inverter mode injects significantly more power than typical PLC systems — this is intentional, as it must be able to drive signal across building transformers and over longer distances. However, it is still well within safe limits.
 
 Frequently Asked Questions
@@ -104,5 +105,5 @@ In other regions: regulations vary. Check local EMC regulations before deploying
 Q: What if two GRIDNET devices inject at the same time?
 The inverter master protocol prevents this. Only one device injects at any time. See the protocol documentation for details.
 
-Last updated: 2026 — REV 0.4
+Last updated: 2026 — REV 0.5
 See also: docs/protocol.md — Inverter Master Protocol section

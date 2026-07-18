@@ -56,13 +56,17 @@ Priority order, evaluated continuously:
 PriorityChannelConditionCurrent draw1Powerline (PLC)Grid power on, line intact~58mA2Inverter + PLCGrid off, line physically intact~260mA3Wi-Fi MeshLine damaged or PLC failed~138mA
 Transition time between channels: < 20ms (relay-controlled).
 
-Inverter Master Protocol
+Inverter Master Protocol (REV 0.5)
 When grid power fails, only one device per segment injects 24V AC onto the wire to prevent voltage conflicts.
-Grid power lost
-  → Wait 2 seconds
+Grid power lost, witnessed directly (device was GRID_ON a moment ago)
+  → Wait 2 seconds + jitter (0–500ms)
   → Listen for 24V AC on wire
       YES → Another device is master → enter passive mode
       NO  → Become master → start injecting 24V AC
+
+Device powering on / rejoining while the grid is already off
+  → Wait a full MASTER_ALIVE heartbeat cycle (~12 seconds + jitter) instead
+      — it can't assume no master exists just because it hasn't heard one yet
 
 Master behavior:
   → Broadcast MASTER_ALIVE packet every 10 seconds
@@ -70,6 +74,7 @@ Master behavior:
       → Lowest-address active device becomes new master
 Why only one master?
 Multiple devices injecting simultaneously cause voltage conflicts and signal corruption. The master selection protocol ensures exactly one inverter is active per segment at any time.
+Why the jitter, and two different listen delays? See docs/inverter-master.md's "Design Notes — REV History": REV 0.4's flat, unjittered 2s delay made segment-wide split-brain the common outcome rather than a rare fallback, and using that same short delay for a device joining an already-running segment gave it only ~20% odds of hearing the existing master before wrongly claiming mastership itself.
 
 Electrical Safety
 
