@@ -215,13 +215,13 @@ This is the same principle used by HomePlug adapters deployed in millions of hom
 | Hardware architecture (dual-board design) | ✅ Complete |
 | Communication protocol stack | ✅ Complete |
 | Inverter master protocol | ✅ Complete |
-| Protection circuit design (TVS + MOV + relay) | ✅ Complete |
-| PCB layout plan | ✅ Complete |
-| Case design | ✅ Complete |
+| Protection circuit topology (TVS + MOV + relay) | ✅ Complete — topology and parts selected ([`hardware/bom.md`](hardware/bom.md)); not yet a drawn schematic |
+| PCB schematic capture + layout | 📋 Planned — no schematic or layout file exists yet (`hardware/schematics/README.md` says the same); target board sizes in the BOM are cost-estimate placeholders, not a routed design |
+| Case design (CAD) | 📋 Planned — only target external dimensions exist (see Hardware Overview); no CAD model |
 | Software architecture (Zephyr + Forth VM) | ✅ Complete |
 | Electrical safety analysis | ✅ Complete |
 | Protocol & Forth VM reference prototypes ([`tools/`](tools/), Python, pre-hardware validation) | ✅ Complete |
-| **PCB fabrication / Hardware prototype** | 🔄 Next step |
+| **PCB fabrication / Hardware prototype** | 🔄 Next step — schematic capture and layout have to happen first |
 | Embedded firmware (Zephyr, on real hardware) | 📋 Planned — starts after PCB prototype |
 | Field testing | 📋 Planned |
 
@@ -253,10 +253,7 @@ gridnet/
 ```
 
 Note: `hardware/pcb/` and `hardware/case/` aren't in the tree above because
-they don't exist yet — the top-level Project Status table's "PCB layout
-plan" and "Case design" rows describe decisions made, not files committed
-to the repo. Worth keeping in mind before treating those as "done" in the
-filesystem sense.
+neither exists yet — see the Project Status table above.
 
 ---
 
