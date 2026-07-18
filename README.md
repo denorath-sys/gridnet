@@ -121,12 +121,20 @@ Hierarchical 4-byte address — no central registry required:
 When grid power fails, only one device per segment injects 24V to prevent voltage conflicts:
 
 ```
-Grid fails → wait 2s → listen for 24V on wire
+Grid fails → wait 2s + jitter → listen for 24V on wire
   If 24V detected  → passive mode (another device is master)
   If no 24V        → become master, start injecting
 Master broadcasts MASTER_ALIVE every 10s
 If no MASTER_ALIVE for 30s → lowest-address active device takes over
+
+New/rebooting device joining a segment already running: listens a full
+heartbeat cycle (~12s), not just 2s — it can't assume no master exists
+just because it hasn't heard one yet.
 ```
+
+See [`docs/inverter-master.md`](docs/inverter-master.md) (REV 0.5) for why
+both the jitter and the longer cold-join window matter — validated against
+a reference implementation in [`tools/protocol-sim`](tools/protocol-sim).
 
 ### Software Architecture
 
@@ -152,17 +160,20 @@ Users write and share applications in a sandboxed Forth interpreter (~2KB RAM). 
 
 Security constraints: source address lock, rate limit (5 packets/sec), max 256 bytes/message, filesystem isolation per app.
 
-Example — local market order system in ~15 lines:
+Example — local market order system in ~15 lines (verified against the
+reference VM in [`tools/forth-vm`](tools/forth-vm) — see that directory's
+README for why `S"` and `KEY? IF KEY ...` are used instead of the shorter
+but non-functional `"` / `KEY? SEND-MSG` you might expect):
 ```forth
 : HEADER
-  0 0 " ╔═══════════════╗" WRITE
-  0 1 " ║  CORNER SHOP  ║" WRITE
-  0 2 " ╚═══════════════╝" WRITE ;
+  0 0 S" ╔═══════════════╗" WRITE
+  0 1 S" ║  CORNER SHOP  ║" WRITE
+  0 2 S" ╚═══════════════╝" WRITE ;
 
 : ORDER
   HEADER
-  0 4 " 1. Bread  2. Milk" WRITE
-  KEY? SEND-MSG ;
+  0 4 S" 1. Bread  2. Milk" WRITE
+  KEY? IF KEY S" 01.03.07.99" SEND-MSG THEN ;
 
 : MAIN BEGIN ORDER 1000 WAIT AGAIN ;
 MAIN
@@ -209,8 +220,9 @@ This is the same principle used by HomePlug adapters deployed in millions of hom
 | Case design | ✅ Complete |
 | Software architecture (Zephyr + Forth VM) | ✅ Complete |
 | Electrical safety analysis | ✅ Complete |
+| Protocol & Forth VM reference prototypes ([`tools/`](tools/), Python, pre-hardware validation) | ✅ Complete |
 | **PCB fabrication / Hardware prototype** | 🔄 Next step |
-| Firmware development | 📋 Planned |
+| Embedded firmware (Zephyr, on real hardware) | 📋 Planned — starts after PCB prototype |
 | Field testing | 📋 Planned |
 
 ---
@@ -223,22 +235,28 @@ gridnet/
 ├── LICENSE                    (CERN-OHL-W-2.0)
 ├── CONTRIBUTING.md
 ├── hardware/
-│   ├── schematics/            (board schematics)
-│   ├── pcb/                   (PCB layout plan)
-│   ├── bom.md                 (bill of materials)
-│   └── case/                  (enclosure design)
+│   ├── schematics/            (placeholder — not yet added, see its README)
+│   └── bom.md                 (bill of materials)
 ├── docs/
 │   ├── protocol.md            (full protocol stack)
 │   ├── firmware-arch.md       (Zephyr + Forth VM)
 │   ├── electrical-safety.md   (CENELEC compliance)
 │   └── inverter-master.md     (master selection protocol)
 ├── firmware/
-│   └── README.md              (in development)
+│   └── README.md              (planned structure — embedded firmware not started)
+├── tools/
+│   ├── protocol-sim/          (Python reference implementation of docs/protocol.md + inverter-master.md)
+│   └── forth-vm/              (Python prototype of the sandboxed Forth VM)
 └── media/
     ├── logo-cyan.svg
-    ├── logo-silver.svg
-    └── device-render.png
+    └── logo-silver.svg
 ```
+
+Note: `hardware/pcb/` and `hardware/case/` aren't in the tree above because
+they don't exist yet — the top-level Project Status table's "PCB layout
+plan" and "Case design" rows describe decisions made, not files committed
+to the repo. Worth keeping in mind before treating those as "done" in the
+filesystem sense.
 
 ---
 
