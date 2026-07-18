@@ -25,18 +25,28 @@ language-semantics prototype, not a from-scratch embedded VM implementation):
 
 from __future__ import annotations
 
-from typing import Iterator, List, Tuple, Union
+from typing import Iterator, List, Optional, Tuple, Union
 
-Token = Tuple[str, str]  # ("WORD", text) or ("STR", text)
+Token = Tuple[str, str]  # ("WORD", text), ("STR", text), or ("STRLIT", text)
 
 TRUE = -1
 FALSE = 0
 
-CONTROL_WORDS = {"IF", "ELSE", "THEN", "BEGIN", "UNTIL", "WHILE", "REPEAT", "DO", "LOOP"}
+CONTROL_WORDS = {"IF", "ELSE", "THEN", "BEGIN", "UNTIL", "WHILE", "REPEAT", "AGAIN", "DO", "LOOP"}
 
 
 class ForthError(Exception):
     pass
+
+
+class StepLimitExceeded(ForthError):
+    """Raised when a VM constructed with step_limit=N executes more than N
+    ops without finishing — the safety valve a real sandboxed VM needs
+    against a runaway BEGIN...AGAIN or buggy loop. docs/firmware-arch.md's
+    sandbox table covers rate limiting, message size, filesystem isolation,
+    and screen bounds, but nothing about CPU/step budget — this is the gap
+    that fills, at the language level (a real embedded VM would likely also
+    want a watchdog timer at the RTOS level)."""
 
 
 def tokenize(text: str) -> Iterator[Token]:
@@ -66,6 +76,16 @@ def tokenize(text: str) -> Iterator[Token]:
             yield ("STR", text[start:close])
             i = close + 1
             continue
+        if text[i : i + 2].upper() == 'S"':
+            start = i + 2
+            if start < n and text[start] == " ":
+                start += 1  # the delimiter space after S" is not part of the string
+            close = text.find('"', start)
+            if close == -1:
+                raise ForthError('unterminated S" string"')
+            yield ("STRLIT", text[start:close])
+            i = close + 1
+            continue
         j = i
         while j < n and not text[j].isspace():
             j += 1
@@ -88,12 +108,14 @@ Op = Union[Tuple[str, ...], object]
 
 
 class ForthVM:
-    def __init__(self, output=None) -> None:
+    def __init__(self, output=None, step_limit: Optional[int] = None) -> None:
         self.stack: List[object] = []
         self.memory: List[object] = []
         self.dictionary: dict = {}
         self.loop_stack: List[int] = []
         self._output = output if output is not None else []
+        self.step_limit = step_limit
+        self._steps = 0
         self._register_builtins()
 
     # ------------------------------------------------------------------ #
@@ -127,6 +149,9 @@ class ForthVM:
         for kind, text in tokens:
             if kind == "STR":
                 self._output.append(text)
+                continue
+            if kind == "STRLIT":
+                self.push(text)
                 continue
             word = text.upper()
             if word == ":":
@@ -183,6 +208,9 @@ class ForthVM:
             if kind == "STR":
                 ops.append(("PRINT_STR", text))
                 continue
+            if kind == "STRLIT":
+                ops.append(("LIT", text))
+                continue
             word = text.upper()
             if word in stop_words:
                 return ForthVM._Body(ops, word)
@@ -193,7 +221,7 @@ class ForthVM:
             elif word == "DO":
                 body = self._compile_body(tokens, stop_words=("LOOP",))
                 ops.append(("DO", body.ops))
-            elif word in (";", "ELSE", "THEN", "UNTIL", "WHILE", "REPEAT", "LOOP"):
+            elif word in (";", "ELSE", "THEN", "UNTIL", "WHILE", "REPEAT", "AGAIN", "LOOP"):
                 raise ForthError(f"{word} without matching opener")
             elif word == ":":
                 raise ForthError(": cannot be nested inside another definition")
@@ -215,9 +243,11 @@ class ForthVM:
         return ("IF", true_body.ops, [])
 
     def _compile_begin(self, tokens: Iterator[Token]) -> Op:
-        first = self._compile_body(tokens, stop_words=("UNTIL", "WHILE"))
+        first = self._compile_body(tokens, stop_words=("UNTIL", "WHILE", "AGAIN"))
         if first.stop == "UNTIL":
             return ("BEGIN_UNTIL", first.ops)
+        if first.stop == "AGAIN":
+            return ("BEGIN_AGAIN", first.ops)
         loop_body = self._compile_body(tokens, stop_words=("REPEAT",))
         return ("BEGIN_WHILE", first.ops, loop_body.ops)
 
@@ -236,6 +266,10 @@ class ForthVM:
             self._exec_one(op)
 
     def _exec_one(self, op: Op) -> None:
+        if self.step_limit is not None:
+            self._steps += 1
+            if self._steps > self.step_limit:
+                raise StepLimitExceeded(f"exceeded step_limit={self.step_limit} ops")
         kind = op[0]
         if kind == "LIT":
             self.push(op[1])
@@ -260,6 +294,14 @@ class ForthVM:
                 if self.pop() == FALSE:
                     break
                 self._exec_ops(loop_ops)
+        elif kind == "BEGIN_AGAIN":
+            # Unconditional — no flag popped, unlike UNTIL/WHILE. Only ever
+            # terminates via an exception (step_limit, or a builtin raising
+            # one) — there's no EXIT/QUIT word in this prototype to break out
+            # from Forth code itself, same as real hardware relying on reset.
+            _, body = op
+            while True:
+                self._exec_ops(body)
         elif kind == "DO":
             _, body = op
             start = self.pop()

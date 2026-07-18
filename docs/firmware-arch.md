@@ -52,6 +52,9 @@ A minimal sandboxed Forth interpreter runs as part of the UI task.
 ParameterValueRAM footprint~2KBStack depth64 cellsDictionary size~8KB FlashMax app size64KB (Flash) or unlimited (microSD)
 Security Sandbox
 RuleDescriptionAddress lockApp cannot change source addressRate limitMax 5 packets/second per appMessage sizeMax 256 bytes per messageBroadcastRequires explicit BROADCAST permissionFilesystemEach app isolated to /lfs/apps/<app_id>/ScreenLimited to 80×25 character area
+
+A Python prototype of this VM — language core plus the WRITE/KEY/KEY?/SEND-MSG words and every sandbox rule above except filesystem isolation (nothing to isolate yet, no file words exist in the prototype) — lives at tools/forth-vm/, validated against the corner-shop example below (it actually runs there now, including the BEGIN...AGAIN main loop).
+
 App Distribution
 Forth apps (.fth files) can be sent peer-to-peer over the network — exactly like BBS-era program sharing. A neighbor shares their market order system, you receive it, it runs locally.
 

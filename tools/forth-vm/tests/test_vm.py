@@ -1,6 +1,6 @@
 import unittest
 
-from forth_vm.vm import ForthError, ForthVM, tokenize
+from forth_vm.vm import ForthError, ForthVM, StepLimitExceeded, tokenize
 
 
 def run(src: str) -> str:
@@ -113,6 +113,17 @@ class TestControlFlow(unittest.TestCase):
         src = ": UPTO3 0 BEGIN DUP 3 < WHILE DUP . 1 + REPEAT DROP ; UPTO3"
         self.assertEqual(run(src), "012")
 
+    def test_begin_again_is_unconditional_and_needs_a_step_limit_to_stop(self):
+        vm = ForthVM(step_limit=25)
+        with self.assertRaises(StepLimitExceeded):
+            vm.run(": SPIN 0 BEGIN 1 + DUP . AGAIN ; SPIN")
+        self.assertTrue(vm.output.startswith("123"))  # it did run, just never terminates on its own
+
+    def test_step_limit_none_by_default_does_not_affect_normal_programs(self):
+        # A large but finite DO loop must run to completion when no
+        # step_limit is set — confirms the safety valve is opt-in.
+        self.assertEqual(run(": BIG 200 0 DO I DROP LOOP ; BIG 111 ."), "111")
+
     def test_do_loop_with_index(self):
         self.assertEqual(run(": COUNT 5 0 DO I . LOOP ; COUNT"), "01234")
 
@@ -175,6 +186,20 @@ class TestOutput(unittest.TestCase):
 
     def test_string_literal_interpret_mode(self):
         self.assertEqual(run('." direct output"'), "direct output")
+
+    def test_s_quote_pushes_a_string_value_instead_of_printing(self):
+        vm = ForthVM()
+        vm.run('S" pushed"')
+        self.assertEqual(vm.stack, ["pushed"])
+        self.assertEqual(vm.output, "")  # unlike .", nothing is printed
+
+    def test_s_quote_value_can_be_printed_later(self):
+        self.assertEqual(run('S" hi" DUP . CR'), "hi\n")
+
+    def test_s_quote_works_inside_a_definition(self):
+        vm = ForthVM()
+        vm.run(': GET-GREETING S" hello" ; GET-GREETING')
+        self.assertEqual(vm.stack, ["hello"])
 
 
 class TestErrors(unittest.TestCase):
