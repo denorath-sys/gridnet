@@ -27,7 +27,7 @@ READY.
 
 Task Architecture
 Tasks listed in priority order (0 = highest):
-TaskPriorityStackDescriptionCHANNEL_MONITOR0512BV-Sense ISR, automatic channel switchingPLC_RX11024BST7580 UART interrupt-driven receiveMESH_RX21024BESP32-C3 UART, Wi-Fi packet receiveROUTER32048BRouting table, store-and-forwardKEYBOARD4512BKey matrix scan, TrackPoint ADCUI54096BLCD frame buffer, screen updateBACKGROUND61024BArchive GC, battery monitor, LEDs
+TaskPriorityStackDescriptionCHANNEL_MONITOR0512BV-Sense ISR, automatic channel switchingPLC_RX11024BST7580 UART interrupt-driven receiveMESH_RX21024BESP32-C3 UART, Wi-Fi packet receiveROUTER32048BRouting table, store-and-forwardKEYBOARD4512BKey matrix scan, TrackPoint ADCUI54096BLCD draw commands over SPI to the RA8875 (which holds the actual frame buffer in its own onboard SDRAM), screen updateBACKGROUND61024BArchive GC, battery monitor, LEDs
 
 Filesystem Layout
 LittleFS on 8MB SPI Flash:
@@ -97,6 +97,6 @@ boards/riscv/gridnet/
     └── openocd.cfg      ← Debug probe configuration
 
 Development Status
-ComponentStatusArchitecture design✅ CompleteZephyr BSP / Device Tree📋 Planned — starts after PCB prototypeST7580 PLC driver📋 PlannedLCD driver (ILI9488)📋 PlannedKeyboard / TrackPoint driver📋 PlannedPLC protocol stack📋 PlannedForth VM📋 PlannedWi-Fi mesh (ESP32-C3)📋 PlannedBluetooth HID📋 PlannedFirmware update (microSD + DFU)📋 Planned
+ComponentStatusArchitecture design✅ CompleteZephyr BSP / Device Tree📋 Planned — starts after PCB prototypeST7580 PLC driver📋 PlannedLCD driver (RA8875)📋 Planned — see hardware/bom.md REV 0.5: ILI9488 (REV 0.4) doesn't support this display's 800×480 resolutionKeyboard / TrackPoint driver📋 PlannedPLC protocol stack📋 PlannedForth VM📋 PlannedWi-Fi mesh (ESP32-C3)📋 PlannedBluetooth HID📋 PlannedFirmware update (microSD + DFU)📋 Planned
 
-Last updated: 2026 — REV 0.4
+Last updated: 2026 — REV 0.5

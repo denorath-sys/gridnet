@@ -47,16 +47,16 @@ The user-facing device. ThinkPad-inspired clamshell form factor.
 
 | Component | Details |
 |---|---|
-| **Processor** | GD32VF103 — RISC-V, 108MHz, 32KB RAM, 1MB Flash |
-| **Wireless** | ESP32-C3 — Wi-Fi 2.4GHz mesh + Bluetooth 5.0 LE |
-| **Display** | 5.0" STN LCD, 800×480, 256 colors, amber backlight |
+| **Processor** | GD32VF103CCT6 — RISC-V, 108MHz, 32KB RAM, 256KB Flash |
+| **Wireless** | ESP32-C3-MINI-1U — Wi-Fi 2.4GHz mesh + Bluetooth 5.0 LE |
+| **Display** | 5.0" TFT LCD, 800×480, RA8875 controller (onboard SDRAM frame buffer), 256 colors, amber-tinted backlight |
 | **Keyboard** | 40-key mechanical (Kailh LP), amber LED backlight, red TrackPoint |
 | **Right panel** | M1–M4 macro keys + 4×4 numeric keypad + speaker |
 | **Speaker** | 1W / 8Ω + PAM8403 amplifier |
 | **Storage** | 8MB SPI Flash (LittleFS) + microSD slot |
-| **Battery** | 2× 18650, 8000mAh, ~6 days active use |
+| **Battery** | 2× 18650, 3350mAh-class genuine cells (~6700mAh total), ~5 days active use |
 | **Charging** | USB-C, ~4 hours |
-| **Antenna** | SMA connector, external |
+| **Antenna** | SMA connector, external (via U.FL pigtail from the Wi-Fi module) |
 | **Dimensions** | 260 × 160 × 28mm, ~680g |
 | **OS** | Zephyr RTOS, custom RISC-V BSP |
 
@@ -72,7 +72,7 @@ Separate unit. Plugs directly into any wall outlet (Schuko). Connects to termina
 | **Power** | HLK-5M05 SMPS, 230VAC → 5VDC |
 | **Indicators** | 3× LED: Power / PLC / Wi-Fi |
 
-**Prototype BOM cost: ~$112 USD** (single unit, retail component pricing)
+**Prototype BOM cost: ~$152 USD** (single unit, retail component pricing — see [`hardware/bom.md`](hardware/bom.md) REV 0.5 for the full breakdown and why this went up from the original ~$112 estimate)
 
 ---
 
