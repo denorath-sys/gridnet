@@ -74,7 +74,9 @@ judgment call:
    18650 chemistry (would need 4000mAh/cell; real cells top out ~3500mAh).
    Fixed to genuine 3350mAh-class cells (~6700mAh total) — the honest
    ceiling for 2 real cells, and flagged the "8000mAh 18650" claims common
-   on general marketplaces as effectively always counterfeit.
+   on general marketplaces as effectively always counterfeit. (The "~5 days
+   active use" runtime derived from this capacity was also wrong for
+   unrelated reasons — see docs/firmware-arch.md's Power Budget section.)
 5. TrackPoint description said "PS/2 compatible" (a synchronous serial
    protocol) while docs/firmware-arch.md's own task table already said
    "TrackPoint ADC" (raw analog reads) — these need different firmware and

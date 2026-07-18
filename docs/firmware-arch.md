@@ -96,7 +96,43 @@ boards/riscv/gridnet/
 └── support/
     └── openocd.cfg      ← Debug probe configuration
 
+Power Budget (REV 0.6)
+
+The Channel Layer figures in docs/protocol.md (~58/260/138mA) describe the
+PLC Adapter's mains-powered channel-switching current, not the
+battery-powered Terminal's total draw — the Terminal has no PLC SoC at all
+(see "ESP32-C3 Co-processor" above) and always talks to its adapter, or to
+other terminals in mesh fallback, over WiFi. An earlier revision of this
+project used those channel-layer numbers as a stand-in for the Terminal's
+whole-device battery life, which left out its two biggest continuous
+loads entirely: the TFT backlight and the keyboard backlight.
+
+Recomputed here from typical datasheet-class figures for the actual named
+parts (see hardware/bom.md REV 0.5) — not measurements, since no hardware
+exists yet to measure:
+
+Active use (screen on, WiFi connected with mesh traffic, keyboard backlight on)
+ComponentCurrentMCU (GD32VF103CCT6 @108MHz, active)45mAESP32-C3 WiFi mesh, connected + traffic (avg)90mARA8875 controller (driving display)30mATFT backlight (5", mid brightness)150mAKeyboard backlight (40× amber LED, multiplexed)30mAMisc (RTC, SPI flash/SRAM idle, TrackPoint, µSD idle)10mATOTAL355mA
+
+Standby (screen off, mesh-listen only)
+ComponentCurrentMCU (Zephyr tickless idle)3mAESP32-C3 WiFi modem/light-sleep (periodic mesh check)8mADisplay: OFF0mAKeyboard backlight: OFF0mAMisc (RTC, idle peripherals)3mATOTAL14mA
+
+Runtime, at 6700mAh (hardware/bom.md REV 0.5) and ~88% typical
+boost-converter efficiency (IP5306-class):
+
+- Active use: ~16.6 hours (~0.7 days) — not the "~5 days active use" the
+  top-level README claimed before this revision.
+- Standby (screen off): ~421 hours (~17.5 days).
+
+A multi-day runtime figure is physically real for this battery — just only
+in the low-power standby/mesh-listening state, not with the screen on and
+in active use. The two states differ by roughly 25×, which is the number
+worth remembering here; the absolute mA figures are estimates that will
+shift once real firmware power management (backlight PWM level, WiFi sleep
+duty-cycling, MCU sleep aggressiveness) exists to measure against — none of
+that has been written yet.
+
 Development Status
 ComponentStatusArchitecture design✅ CompleteZephyr BSP / Device Tree📋 Planned — starts after PCB prototypeST7580 PLC driver📋 PlannedLCD driver (RA8875)📋 Planned — see hardware/bom.md REV 0.5: ILI9488 (REV 0.4) doesn't support this display's 800×480 resolutionKeyboard / TrackPoint driver📋 PlannedPLC protocol stack📋 PlannedForth VM📋 PlannedWi-Fi mesh (ESP32-C3)📋 PlannedBluetooth HID📋 PlannedFirmware update (microSD + DFU)📋 Planned
 
-Last updated: 2026 — REV 0.5
+Last updated: 2026 — REV 0.6

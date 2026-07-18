@@ -54,7 +54,7 @@ The user-facing device. ThinkPad-inspired clamshell form factor.
 | **Right panel** | M1–M4 macro keys + 4×4 numeric keypad + speaker |
 | **Speaker** | 1W / 8Ω + PAM8403 amplifier |
 | **Storage** | 8MB SPI Flash (LittleFS) + microSD slot |
-| **Battery** | 2× 18650, 3350mAh-class genuine cells (~6700mAh total), ~5 days active use |
+| **Battery** | 2× 18650, 3350mAh-class genuine cells (~6700mAh total), ~17h active use (screen on) / ~17.5 days standby (screen off, mesh-listen only) — see [`docs/firmware-arch.md`](docs/firmware-arch.md) Power Budget for the full breakdown |
 | **Charging** | USB-C, ~4 hours |
 | **Antenna** | SMA connector, external (via U.FL pigtail from the Wi-Fi module) |
 | **Dimensions** | 260 × 160 × 28mm, ~680g |
