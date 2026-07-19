@@ -214,9 +214,18 @@ class Schematic:
             parts.append(sexp.indent(block, 2))
         return "\t(lib_symbols\n" + "\n".join(parts) + "\n\t)\n"
 
+    def _default_footprint(self, lib_id: str) -> str:
+        """The symbol definition's own Footprint property (e.g. baked into
+        a real KiCad library part, or into one of our custom symbols via
+        make_symbol.py) -- used as a fallback so that NOT overriding the
+        footprint doesn't silently blank it out on the schematic instance."""
+        block = self._used_symbol_blocks.get(lib_id, "")
+        m = re.search(r'\(property "Footprint" "([^"]*)"', block)
+        return m.group(1) if m else ""
+
     def _emit_component(self, comp: "Component") -> str:
         lib_name, symbol_name = comp.lib_id.split(":", 1)
-        fp = comp.footprint_override or ""
+        fp = comp.footprint_override or self._default_footprint(comp.lib_id)
         uid = sexp.new_uuid()
         extra_props = "".join(
             f'\t\t(property "{k}" "{v}"\n\t\t\t(at {comp.x} {comp.y} 0)\n'

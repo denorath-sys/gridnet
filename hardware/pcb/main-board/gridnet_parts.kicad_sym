@@ -1534,7 +1534,7 @@
 			(at -16.51 22.86 0)
 			(effects (font (size 1.27 1.27)))
 		)
-		(property "Footprint" "RF_Module:ESP32-C3-MINI-1"
+		(property "Footprint" "RF_Module:ESP32-C3-WROOM-02U"
 			(at 0 0 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
@@ -1542,7 +1542,7 @@
 			(at 0 0 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
-		(property "Description" "Espressif Wi-Fi/BLE module, U.FL antenna variant -- MODERATE CONFIDENCE: pin functions are right, exact castellated-pad NUMBERS need verification against Espressif's ESP32-C3-MINI-1(U) datasheet before layout — CUSTOM SYMBOL, generic rectangle body, needs datasheet pin-number verification before use"
+		(property "Description" "Espressif Wi-Fi/BLE module, U.FL antenna variant -- MODERATE CONFIDENCE: pin functions are right, exact castellated-pad NUMBERS need verification against Espressif's ESP32-C3-MINI-1(U) datasheet before layout. Footprint is a same-family PLACEHOLDER (see comment above) -- not the real MINI-1U footprint. — CUSTOM SYMBOL, generic rectangle body, needs datasheet pin-number verification before use"
 			(at 0 0 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)

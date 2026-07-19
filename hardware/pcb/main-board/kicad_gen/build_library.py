@@ -145,8 +145,14 @@ def main() -> None:
         build_symbol(
             name="ESP32-C3-MINI-1U",
             reference="U",
-            footprint="RF_Module:ESP32-C3-MINI-1",
-            description="Espressif Wi-Fi/BLE module, U.FL antenna variant -- MODERATE CONFIDENCE: pin functions are right, exact castellated-pad NUMBERS need verification against Espressif's ESP32-C3-MINI-1(U) datasheet before layout",
+            # PLACEHOLDER FOOTPRINT: no KiCad library footprint exists for the
+            # exact MINI-1U module (only DevKitM-1/WROOM-02(U) are available in
+            # this environment's RF_Module library). WROOM-02U is the closest
+            # same-family U.FL-antenna module and stands in for placement
+            # purposes only -- replace with a real MINI-1U footprint (built from
+            # Espressif's datasheet) before layout/fab.
+            footprint="RF_Module:ESP32-C3-WROOM-02U",
+            description="Espressif Wi-Fi/BLE module, U.FL antenna variant -- MODERATE CONFIDENCE: pin functions are right, exact castellated-pad NUMBERS need verification against Espressif's ESP32-C3-MINI-1(U) datasheet before layout. Footprint is a same-family PLACEHOLDER (see comment above) -- not the real MINI-1U footprint.",
             datasheet="https://www.espressif.com/sites/default/files/documentation/esp32-c3-mini-1_datasheet_en.pdf",
             pins=[
                 Pin("1", "GND", "pwr", "left"),
