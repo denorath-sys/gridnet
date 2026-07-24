@@ -216,12 +216,13 @@ This is the same principle used by HomePlug adapters deployed in millions of hom
 | Communication protocol stack | ✅ Complete |
 | Inverter master protocol | ✅ Complete |
 | Protection circuit topology (TVS + MOV + relay) | ✅ Complete — topology and parts selected ([`hardware/bom.md`](hardware/bom.md)); not yet a drawn schematic |
-| PCB schematic capture + layout | 📋 Planned — no schematic or layout file exists yet (`hardware/schematics/README.md` says the same); target board sizes in the BOM are cost-estimate placeholders, not a routed design |
+| Main Board schematic + PCB layout ([`hardware/pcb/main-board`](hardware/pcb/main-board)) | 🔄 Mostly done — schematic complete, PCB routed (170/171 nets via Freerouting, 1 net left to finish by hand); 4 custom part symbols still need datasheet verification before fab, see that directory's README |
+| PLC/Power Board + PLC Adapter schematic + PCB (BOM's Board 1) | 📋 Planned — no schematic or layout file exists yet (`hardware/schematics/README.md` says the same) |
 | Case design (CAD) | 📋 Planned — only target external dimensions exist (see Hardware Overview); no CAD model |
 | Software architecture (Zephyr + Forth VM) | ✅ Complete |
 | Electrical safety analysis | ✅ Complete |
 | Protocol & Forth VM reference prototypes ([`tools/`](tools/), Python, pre-hardware validation) | ✅ Complete |
-| **PCB fabrication / Hardware prototype** | 🔄 Next step — schematic capture and layout have to happen first |
+| **PCB fabrication / Hardware prototype** | 🔄 Next step — Main Board layout needs its last trace + datasheet verification pass; Board 1 schematic/layout still to do |
 | Embedded firmware (Zephyr, on real hardware) | 📋 Planned — starts after PCB prototype |
 | Field testing | 📋 Planned |
 
@@ -235,7 +236,9 @@ gridnet/
 ├── LICENSE                    (CERN-OHL-W-2.0)
 ├── CONTRIBUTING.md
 ├── hardware/
-│   ├── schematics/            (placeholder — not yet added, see its README)
+│   ├── schematics/            (placeholder — Board 1 (PLC/Power) not yet added, see its README)
+│   ├── pcb/
+│   │   └── main-board/        (Board 2 — KiCad schematic + routed PCB, see its README)
 │   └── bom.md                 (bill of materials)
 ├── docs/
 │   ├── protocol.md            (full protocol stack)
@@ -252,8 +255,10 @@ gridnet/
     └── logo-silver.svg
 ```
 
-Note: `hardware/pcb/` and `hardware/case/` aren't in the tree above because
-neither exists yet — see the Project Status table above.
+Note: `hardware/case/` isn't in the tree above because it doesn't exist yet
+— see the Project Status table above. `hardware/pcb/` currently covers only
+the Main Board (Board 2); the PLC/Power Board (Board 1) still lives in
+`hardware/schematics/` as a placeholder.
 
 ---
 
