@@ -223,6 +223,37 @@ stopped it after 10 passes of no improvement) — finishing this one trace
 by hand in KiCad's PCB editor is the realistic path, not more autorouter
 passes.
 
+**Follow-up diagnosis (why it's not a quick fix).** A from-scratch
+clearance-aware pathfinder (independent of Freerouting, built to
+double-check its "stuck" verdict) was run against this net with exact
+KiCad clearance rules — track-to-track, track-to-pad, and the larger
+via-to-everything halos a real via needs, since a first pass that ignored
+the via-specific clearance produced a routable-looking path that then
+failed real `kicad-cli pcb drc` with 17 clearance violations. Two things
+came out of that:
+
+- The obvious suspect — `PB12`/pin 27 sitting directly between pins 26
+  and 28 on the LQFP48's 0.5mm pitch — is *not* actually the blocker.
+  A coarse (0.1mm) search grid was reporting a false pinch there; at
+  finer resolution (0.025mm) the real clearance is a tight but valid
+  ~0.05mm, and excluding the neighboring `/SPI2_SCK` escape trace (the
+  first suspect) from the search doesn't open a path.
+- The real blocker is `/+3V3_MCU` — the board's 3.3V rail — but not at
+  a single local segment. Excluding the net entirely opens a path;
+  excluding just its five segments nearest the MCU does not. Whatever
+  branch of this net is actually in the way is elsewhere on a net that
+  fans out across a large part of the board, not a contained local
+  detour like the `/SPI2_SCK` case would have been.
+
+Practical effect: this isn't a "nudge one nearby trace" fix. It's a
+rip-up/reroute-style move on a widely-branching power net, which is
+exactly the kind of change KiCad's interactive push-and-shove router is
+for (it can nudge a net live while re-checking DRC as it goes) and not
+something worth doing blind via script. Finishing `/DISP_CS` still means
+opening this board in KiCad's PCB editor — just with the false lead
+(the LQFP pitch) ruled out and the real one (`/+3V3_MCU`'s routing
+somewhere off to the side) identified first.
+
 PCB placement notes
 --------------------
 
@@ -258,7 +289,10 @@ What's not done yet
 --------------------
 
 - **One trace** (`/DISP_CS`, MCU to the display header) — the single
-  connection Freerouting couldn't complete; see "Routing" above.
+  connection Freerouting couldn't complete; see "Routing" above, including
+  the follow-up diagnosis narrowing the real blocker down to `/+3V3_MCU`'s
+  routing elsewhere on the board (not the LQFP pin pitch, and not a
+  single-segment fix).
 - **A design review of the autorouted traces before fabrication.**
   Freerouting respects clearance/courtyard rules (DRC confirms this), but
   it optimizes for "routed and DRC-clean," not for the judgment calls a
