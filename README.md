@@ -216,13 +216,13 @@ This is the same principle used by HomePlug adapters deployed in millions of hom
 | Communication protocol stack | ✅ Complete |
 | Inverter master protocol | ✅ Complete |
 | Protection circuit topology (TVS + MOV + relay) | ✅ Complete — topology and parts selected ([`hardware/bom.md`](hardware/bom.md)); not yet a drawn schematic |
-| Main Board schematic + PCB layout ([`hardware/pcb/main-board`](hardware/pcb/main-board)) | 🔄 Mostly done — schematic complete, PCB routed (170/171 nets via Freerouting, 1 net left to finish by hand); 4 custom part symbols still need datasheet verification before fab, see that directory's README |
+| Main Board schematic + PCB layout ([`hardware/pcb/main-board`](hardware/pcb/main-board)) | 🔄 Schematic's custom parts are now datasheet-verified (3 of 4 had wrong pin numbers, now fixed — see that directory's README) but the routed PCB predates the fix and needs to be regenerated + re-routed against the corrected netlist before it's trustworthy |
 | PLC/Power Board + PLC Adapter schematic + PCB (BOM's Board 1) | 📋 Planned — no schematic or layout file exists yet (`hardware/schematics/README.md` says the same) |
 | Case design (CAD) | 📋 Planned — only target external dimensions exist (see Hardware Overview); no CAD model |
 | Software architecture (Zephyr + Forth VM) | ✅ Complete |
 | Electrical safety analysis | ✅ Complete |
 | Protocol & Forth VM reference prototypes ([`tools/`](tools/), Python, pre-hardware validation) | ✅ Complete |
-| **PCB fabrication / Hardware prototype** | 🔄 Next step — Main Board layout needs its last trace + datasheet verification pass; Board 1 schematic/layout still to do |
+| **PCB fabrication / Hardware prototype** | 🔄 Next step — Main Board PCB needs a full regeneration + re-route against the datasheet-corrected netlist (see that directory's README); Board 1 schematic/layout still to do |
 | Embedded firmware (Zephyr, on real hardware) | 📋 Planned — starts after PCB prototype |
 | Field testing | 📋 Planned |
 

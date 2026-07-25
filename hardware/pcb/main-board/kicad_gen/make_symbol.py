@@ -59,6 +59,7 @@ def build_symbol(
     pins: List[Pin],
     description: str,
     datasheet: str = "~",
+    verified: bool = False,
 ) -> str:
     left = [p for p in pins if p.side == "left"]
     right = [p for p in pins if p.side == "right"]
@@ -108,7 +109,7 @@ def build_symbol(
 \t\t\t(at 0 0 0)
 \t\t\t(effects (font (size 1.27 1.27)) (hide yes))
 \t\t)
-\t\t(property "Description" "{description} — CUSTOM SYMBOL, generic rectangle body, needs datasheet pin-number verification before use"
+\t\t(property "Description" "{description} — CUSTOM SYMBOL, generic rectangle body{'' if verified else ', needs datasheet pin-number verification before use'}"
 \t\t\t(at 0 0 0)
 \t\t\t(effects (font (size 1.27 1.27)) (hide yes))
 \t\t)
