@@ -216,13 +216,13 @@ This is the same principle used by HomePlug adapters deployed in millions of hom
 | Communication protocol stack | ✅ Complete |
 | Inverter master protocol | ✅ Complete |
 | Protection circuit topology (TVS + MOV + relay) | ✅ Complete — topology and parts selected ([`hardware/bom.md`](hardware/bom.md)); not yet a drawn schematic |
-| Main Board schematic + PCB layout ([`hardware/pcb/main-board`](hardware/pcb/main-board)) | 🔄 Schematic's custom parts are now datasheet-verified (3 of 4 had wrong pin numbers, now fixed — see that directory's README) but the routed PCB predates the fix and needs to be regenerated + re-routed against the corrected netlist before it's trustworthy |
+| Main Board schematic + PCB layout ([`hardware/pcb/main-board`](hardware/pcb/main-board)) | ✅ Complete — custom parts datasheet-verified, PCB placed, routed, ground-poured on both layers, DRC clean (0 violations, 0 unconnected). REV 0.7 was a pre-fab design review that caught a refdes-drift bug placing parts in each other's positions (crystal load caps 51mm from the crystal), a boost-converter switching loop spread across 63mm, and every trace at 0.2mm including a 2.4A path — see that directory's README |
 | PLC/Power Board (BOM's Board 1, the PLC Adapter's PCB — see [`hardware/pcb/plc-board`](hardware/pcb/plc-board)) | 🔄 Schematic done for the well-specified parts (ST7580 digital/control/power, ESP32-C3, mains protection, AC-DC supply), ERC-clean. The inverter and the ST7580's PA/line-coupling section need power-electronics design this project's docs don't specify yet (no gate driver, no 8-18V rail, no defined topology) — deliberately left unbuilt rather than guessed at, see that directory's README. No PCB layout yet. |
 | Case design (CAD) | 📋 Planned — only target external dimensions exist (see Hardware Overview); no CAD model |
 | Software architecture (Zephyr + Forth VM) | ✅ Complete |
 | Electrical safety analysis | ✅ Complete |
 | Protocol & Forth VM reference prototypes ([`tools/`](tools/), Python, pre-hardware validation) | ✅ Complete |
-| **PCB fabrication / Hardware prototype** | 🔄 Next step — Main Board is routed and DRC-clean, ready for a design review pass before fab. Board 1 needs its inverter/PA power electronics designed before its own layout can start meaningfully |
+| **PCB fabrication / Hardware prototype** | 🔄 Next step — Main Board has been through a design-review pass and is DRC-clean; what still stands between it and fab is RF layout for the 2.4GHz antenna path and a stackup/impedance decision (see [`hardware/pcb/main-board`](hardware/pcb/main-board) "What's not done yet"). Board 1 needs its inverter/PA power electronics designed before its own layout can start meaningfully |
 | Embedded firmware (Zephyr, on real hardware) | 📋 Planned — starts after PCB prototype |
 | Field testing | 📋 Planned |
 
@@ -237,7 +237,7 @@ gridnet/
 ├── CONTRIBUTING.md
 ├── hardware/
 │   ├── pcb/
-│   │   ├── main-board/         (Board 2 — KiCad schematic + routed PCB, see its README)
+│   │   ├── main-board/         (Board 2 — KiCad schematic + routed, ground-poured PCB, see its README)
 │   │   └── plc-board/          (Board 1 — KiCad schematic, no PCB layout yet, see its README)
 │   └── bom.md                 (bill of materials)
 ├── docs/
