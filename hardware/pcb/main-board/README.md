@@ -72,7 +72,7 @@ three had wrong pin numbers and have been corrected in
 |---|---|---|
 | `23LC1024` | Verified | Checked against Microchip's real 23A1024/23LC1024 datasheet (DS20005142C) — all 8 pins were already correct, no changes needed |
 | `GD32VF103CCT6` | Verified, was wrong | Checked against GigaDevice's real GD32VF103 datasheet (Rev1.6), Figure 2-4 "GD32VF103Cx LQFP48 pinouts" — **35 of 48 pins (14-48) were numbered wrong** and have been corrected; see below |
-| `ESP32-C3-MINI-1U` | Verified, was wrong | Checked against Espressif's real datasheet (v2.2) Table 3-1 — **nearly all pin numbers were wrong** (the symbol had numbered its 19 signal pins 1-19 sequentially; the real module is 53 pins with GND/NC scattered through that range) and have been corrected; see below |
+| `ESP32-C3-MINI-1U` | Verified, was wrong | Checked against Espressif's real datasheet (v2.2) Table 3-1 — **nearly all pin numbers were wrong** (the symbol had numbered its 19 signal pins 1-19 sequentially; the real module is 53 pins with GND/NC scattered through that range) and have been corrected; the placeholder WROOM-02U footprint has also since been replaced with the real MINI-1U footprint, see "Real ESP32-C3-MINI-1U footprint" below |
 | `IP5306` | Verified, was wrong | Checked against Injoinic's real IP5306 datasheet (V1.3) — **all 8 pins were numbered wrong**, `LED3` and `SW` were missing from the symbol entirely, and two `GND` pins were invented that don't exist (the real part's only ground is the exposed PowerPAD); corrected, see below |
 
 Datasheet verification results
@@ -97,8 +97,8 @@ symbol had. Three of the four were substantially wrong:
   them. For example the old symbol's pin 8 ("IO4") is the real module's
   `EN` pin; the old pin 17 ("U0RXD") is a real `NC` pad. Every pin was
   re-numbered against Table 3-1 of Espressif's datasheet. The footprint
-  is still the WROOM-02U placeholder (see the confidence table below) —
-  that's a separate, already-flagged problem from the pin numbering.
+  was still the WROOM-02U placeholder at this point — fixed separately,
+  see "Real ESP32-C3-MINI-1U footprint" below.
 - **IP5306.** All 8 numbered pins were wrong, and the symbol was missing
   two of the part's real pins outright: `LED3` (pin 4) and `SW` (pin 7,
   the DCDC switch node). It had also invented two `GND` pins (old 3 and
@@ -149,6 +149,53 @@ this pass) — placed in the open board area below the MCU cluster
 (`kicad_gen/build_pcb.py`, `L1`/`R14`/`C4`/`C5`), not the power-tree
 column, because the CR2032 holder's real courtyard already fills that
 column from y=50 down (see "PCB placement notes" below).
+
+Real ESP32-C3-MINI-1U footprint
+--------------------------------
+
+Fixed as a follow-up to the datasheet verification pass above, which
+fixed the schematic symbol's pin *numbers* but left the PCB footprint as
+the same-family `RF_Module:ESP32-C3-WROOM-02U` placeholder (a different,
+smaller module standing in for placement purposes only — see the old
+confidence table entry). Replaced with the real thing rather than
+hand-transcribing dimensions off the datasheet's land-pattern drawing
+(error-prone for a 53-pad castellated footprint, and exactly the kind of
+mistake this whole verification pass exists to catch): Espressif
+publishes an official KiCad library at
+[espressif/kicad-libraries](https://github.com/espressif/kicad-libraries)
+(CC-BY-SA 4.0, the same license terms as KiCad's own official libraries),
+and its `ESP32-C3-MINI-1U.kicad_mod` is vendored unmodified into
+`gridnet_footprints.pretty/` — see that directory's README.md for exact
+provenance. `kicad_gen/build_pcb.py` gained a small `LOCAL_FOOTPRINT_LIBS`
+lookup so it can load project-local footprints alongside the ones it
+already pulls from KiCad's bundled libraries.
+
+Verified before use (not just trusted because it's "official"): 53
+distinct pad numbers, with pad 49 (`GND`) present as the expected 3x3
+array of thermal-pad via pads under the module — matches Table 3-1 of
+the datasheet the pin list was checked against.
+
+**Effect on the board.** The real footprint's own hole spec resolved the
+`drill_out_of_range` warnings that showed up in every DRC run so far in
+this document (they were the WROOM-02U placeholder's own 0.2mm holes
+against KiCad's 0.3mm minimum rule — never a placement or routing
+problem, but real DRC errors regardless). Regenerating placement +
+routing against it: **0 DRC violations, 0 unconnected items** — the
+first fully clean `kicad-cli pcb drc` run this board has had.
+
+**New finding, not yet addressed.** The real footprint's other 34 pads
+that the schematic symbol doesn't draw (additional `GND` pins beyond
+the two already wired, and all the `NC` pins) come back from
+`build_pcb.py` as "no matching net" — expected, since the schematic
+only represents the pins this design actually uses (see the confidence
+table above). But Espressif's hardware design guidelines for this module
+generally recommend tying *all* GND pads, including the thermal-pad
+array under pin 49, to the ground plane for RF and thermal performance,
+not just the couple the schematic wires. This design doesn't do that yet
+— worth a follow-up pass (adding the remaining GND pins to the schematic
+symbol and wiring them, and stitching the thermal pad to a ground pour)
+before treating the RF/thermal performance of this module placement as
+finished.
 
 Design assumptions (things this schematic decided that the BOM/docs didn't
 spell out)
@@ -227,10 +274,11 @@ kicad-cli sch erc main-board.kicad_sch --format json -o /tmp/erc.json
 kicad-cli sch export svg main-board.kicad_sch -o /tmp/render/
 ```
 
-Current ERC result (after the datasheet-verification pin fixes and the
-IP5306 inductor addition above): **336 violations, 0 errors.** All
-remaining warnings are benign / expected in a headless-generated
-schematic without a full project sym-lib-table registered:
+Current ERC result (after the datasheet-verification pin fixes, the
+IP5306 inductor addition, and the real ESP32-C3-MINI-1U footprint above):
+**337 violations, 0 errors.** All remaining warnings are benign /
+expected in a headless-generated schematic without a full project
+sym-lib-table registered:
 
 - `endpoint_off_grid` (322) — cosmetic, wire/pin endpoints not snapped to
   KiCad's visual grid
@@ -239,6 +287,11 @@ schematic without a full project sym-lib-table registered:
 - `pin_to_pin` (4) — intentional: each SPI flash/SRAM's `~WP`/`~HOLD` pins
   are tied directly to its own VCC pin (both real, both correct — not a
   wiring bug)
+- `footprint_link_issues` (1) — same cause as `lib_symbol_issues`: this
+  headless environment doesn't have `gridnet_footprints` registered as a
+  project footprint library, so ERC can't confirm the link; the footprint
+  itself loads and places fine (see "Real ESP32-C3-MINI-1U footprint"
+  above and the DRC result below)
 
 To rebuild/validate the PCB placement and routing:
 
@@ -253,20 +306,16 @@ kicad-cli pcb drc main-board.kicad_pcb --format json -o /tmp/drc.json
 See "Routing" below for how the board went from that unrouted state to
 its current routed state.
 
-Current DRC result (routed board): **12 violations, all
-`drill_out_of_range`**, all on the same part (`U9`'s ground-via pads).
-KiCad's default ruleset marks this rule as an error (0.3mm minimum hole
-vs. this footprint's 0.2mm holes), so these do show up as 12 real DRC
-errors — but they trace to one specific, already-flagged cause: `U9`
-uses the ESP32-C3-WROOM-02U as a **placeholder** for the real MINI-1U
-module (see the schematic README's confidence table), and this is that
-placeholder's own hole spec, not a placement or routing mistake.
-Building a real MINI-1U footprint from its datasheet resolves this.
-Courtyard overlaps, net-shorting, clearance violations, and unconnected
-items — the categories that would actually indicate a *placement* or
-*routing* bug — are all clean (0). All 87 nets routed; see "Routing"
-below for how the one net Freerouting couldn't finish (`/USB_DN`, not
-`/DISP_CS` this time) got completed by hand.
+Current DRC result (routed board): **0 violations, 0 unconnected
+items.** The `drill_out_of_range` warnings present in every DRC run
+earlier in this document's history are gone — they traced entirely to
+the WROOM-02U placeholder footprint's own 0.2mm holes against KiCad's
+0.3mm minimum rule (see "Real ESP32-C3-MINI-1U footprint" above), not a
+placement or routing mistake, and the real footprint doesn't have that
+problem. This is the first fully clean `kicad-cli pcb drc` run this
+board has had. All 87 nets routed; see "Routing" below for how the one
+net Freerouting couldn't finish (`/USB_DN`, not `/DISP_CS`) got
+completed by hand.
 
 Routing
 -------
@@ -361,16 +410,16 @@ PCB placement notes
   consistently mean "courtyard center" regardless of the footprint's own
   quirks — a real, repeatable bug (not just a cosmetic one) found and
   fixed while placing the two on-board header rows.
-- **Two `no matching net` groups are expected**, not bugs: (1) `J5`
+- **`no matching net` is expected for `J5`, `J1`, and now `U9`.** `J5`
   (microSD) and `J1` (USB-C) each have a few real footprint pads (shield
   tabs, mechanical/detect pins) with no counterpart in the schematic's
-  simpler symbol — harmless. (2) `U9`'s placeholder footprint
-  (ESP32-C3-WROOM-02U, standing in for the real MINI-1U — see the
-  schematic README's confidence table) has a different pad count/layout
-  than the custom MINI-1U symbol's pin list, so several of its pads have
-  no net assigned. This is the same placeholder-footprint limitation
-  already flagged for the schematic; the module's real footprint needs to
-  be built from its datasheet before layout is final.
+  simpler symbol — harmless. `U9` now uses the real MINI-1U footprint
+  (see "Real ESP32-C3-MINI-1U footprint" above), which has 53 pads
+  against the schematic symbol's 19 — the other 34 (mostly `GND`/`NC`)
+  come back unmatched by design, not because of a placeholder mismatch
+  anymore. See that section's "New finding, not yet addressed" for why
+  that's still worth a follow-up (Espressif recommends grounding all of
+  them, not just the two this design wires).
 
 What's not done yet
 --------------------
@@ -387,9 +436,11 @@ What's not done yet
   battery charge path generally, via placement near the antenna path,
   and return-path continuity for the SPI/I2C buses are all worth a
   manual pass before this goes to fab.
-- **A real footprint for the ESP32-C3-MINI-1U module** (currently a
-  same-family WROOM-02U placeholder) — required before this design is
-  fabricated.
+- **Ground the ESP32-C3-MINI-1U's remaining GND/thermal pads.** See
+  "Real ESP32-C3-MINI-1U footprint" above — the schematic only wires 2
+  of the module's real ~19 GND pads and doesn't stitch the thermal-pad
+  via array to a ground pour; Espressif's guidance recommends grounding
+  all of them for RF/thermal performance.
 - A second schematic sheet (and PCB) for the PLC/Power Board and PLC
   Adapter (see hardware/bom.md's Board 1 and "PLC Adapter" sections) — out
   of scope for this pass, which covers Board 2 (Main Board) only.

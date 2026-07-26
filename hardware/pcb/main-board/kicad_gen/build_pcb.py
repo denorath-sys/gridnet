@@ -22,6 +22,11 @@ from typing import Dict, List, Tuple
 import pcbnew
 
 FOOTPRINT_DIR = "/usr/share/kicad/footprints"
+# Project-local footprints not in KiCad's bundled libraries -- currently just
+# the real ESP32-C3-MINI-1U, vendored from Espressif's official KiCad library
+# (CC-BY-SA 4.0, same license terms as KiCad's own libraries -- see
+# ../gridnet_footprints.pretty/README.md for provenance).
+LOCAL_FOOTPRINT_LIBS = {"gridnet_footprints": "../gridnet_footprints.pretty"}
 NETLIST_PATH = "/tmp/main-board.net"
 BOARD_W = 100.0
 BOARD_H = 80.0
@@ -212,7 +217,11 @@ def main() -> None:
     unmatched_pads = []
     for ref, info in sorted(comps.items()):
         lib_name, fp_name = info.footprint.split(":", 1)
-        fp = pcbnew.FootprintLoad(f"{FOOTPRINT_DIR}/{lib_name}.pretty", fp_name)
+        if lib_name in LOCAL_FOOTPRINT_LIBS:
+            lib_path = LOCAL_FOOTPRINT_LIBS[lib_name]
+        else:
+            lib_path = f"{FOOTPRINT_DIR}/{lib_name}.pretty"
+        fp = pcbnew.FootprintLoad(lib_path, fp_name)
         if fp is None:
             raise SystemExit(f"Footprint not found: {info.footprint} (ref {ref})")
         x, y, rot = PLACEMENT[ref]

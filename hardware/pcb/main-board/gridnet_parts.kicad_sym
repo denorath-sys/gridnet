@@ -1544,7 +1544,7 @@
 			(at -16.51 22.86 0)
 			(effects (font (size 1.27 1.27)))
 		)
-		(property "Footprint" "RF_Module:ESP32-C3-WROOM-02U"
+		(property "Footprint" "gridnet_footprints:ESP32-C3-MINI-1U"
 			(at 0 0 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
@@ -1552,7 +1552,7 @@
 			(at 0 0 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
-		(property "Description" "Espressif Wi-Fi/BLE module, U.FL antenna variant -- pin functions AND pad numbers verified against the real Espressif ESP32-C3-MINI-1/1U datasheet (v2.2) Table 3-1; the module has 53 pads total (mostly GND/NC around the perimeter), only the pads this design actually uses are drawn here -- see that table before adding any new connection. Footprint is still a same-family WROOM-02U PLACEHOLDER (see comment above), not the real MINI-1U footprint. — CUSTOM SYMBOL, generic rectangle body"
+		(property "Description" "Espressif Wi-Fi/BLE module, U.FL antenna variant -- pin functions AND pad numbers verified against the real Espressif ESP32-C3-MINI-1/1U datasheet (v2.2) Table 3-1; the module has 53 pads total (mostly GND/NC around the perimeter), only the pads this design actually uses are drawn on the schematic symbol -- see that table before adding any new connection. Footprint is the real MINI-1U footprint (see comment above), not a placeholder. — CUSTOM SYMBOL, generic rectangle body"
 			(at 0 0 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)

@@ -149,14 +149,14 @@ def main() -> None:
         build_symbol(
             name="ESP32-C3-MINI-1U",
             reference="U",
-            # PLACEHOLDER FOOTPRINT: no KiCad library footprint exists for the
-            # exact MINI-1U module (only DevKitM-1/WROOM-02(U) are available in
-            # this environment's RF_Module library). WROOM-02U is the closest
-            # same-family U.FL-antenna module and stands in for placement
-            # purposes only -- replace with a real MINI-1U footprint (built from
-            # Espressif's datasheet) before layout/fab.
-            footprint="RF_Module:ESP32-C3-WROOM-02U",
-            description="Espressif Wi-Fi/BLE module, U.FL antenna variant -- pin functions AND pad numbers verified against the real Espressif ESP32-C3-MINI-1/1U datasheet (v2.2) Table 3-1; the module has 53 pads total (mostly GND/NC around the perimeter), only the pads this design actually uses are drawn here -- see that table before adding any new connection. Footprint is still a same-family WROOM-02U PLACEHOLDER (see comment above), not the real MINI-1U footprint.",
+            # Real MINI-1U footprint, vendored from Espressif's official KiCad
+            # library (footprints/Espressif.pretty/ESP32-C3-MINI-1U.kicad_mod,
+            # CC-BY-SA 4.0) into ../gridnet_footprints.pretty/ -- see that
+            # directory's README.md for provenance. Verified: 53 distinct pad
+            # numbers, pad 49 (GND) as the expected 3x3 thermal-pad array,
+            # matching Table 3-1 of the datasheet used for the pin list below.
+            footprint="gridnet_footprints:ESP32-C3-MINI-1U",
+            description="Espressif Wi-Fi/BLE module, U.FL antenna variant -- pin functions AND pad numbers verified against the real Espressif ESP32-C3-MINI-1/1U datasheet (v2.2) Table 3-1; the module has 53 pads total (mostly GND/NC around the perimeter), only the pads this design actually uses are drawn on the schematic symbol -- see that table before adding any new connection. Footprint is the real MINI-1U footprint (see comment above), not a placeholder.",
             datasheet="https://documentation.espressif.com/esp32-c3-mini-1_datasheet_en.pdf",
             verified=True,
             pins=[
