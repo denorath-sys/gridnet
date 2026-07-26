@@ -129,6 +129,15 @@ PLACEMENT: Dict[str, Tuple[float, float, float]] = {
                                # the only spot on the board wide enough for its
                                # real 27.46mm courtyard without colliding)
 
+    # IP5306 boost/charge inductor + its SW-node snubber + VOUT decoupling --
+    # added after the initial power-tree layout above, so placed in the open
+    # band below the MCU cluster (y=48-76) rather than the power-tree column,
+    # which J6's real 27x24mm courtyard already fills from y=50 down.
+    "L1": (40.0, 62.0, 0),     # IP5306 boost inductor (SW -> BAT)
+    "R14": (48.0, 62.0, 0),    # SW-node snubber resistor
+    "C4": (48.0, 68.0, 0),     # SW-node snubber capacitor
+    "C5": (40.0, 68.0, 0),     # IP5306 VOUT decoupling cap
+
     # --- MCU cluster (center column, x=34-62) ---
     "R7": (45.46, 5.07, 0),    # BOOT0 pull-down
     "J3": (50.26, 5.07, 0),    # BOOT0 override jumper

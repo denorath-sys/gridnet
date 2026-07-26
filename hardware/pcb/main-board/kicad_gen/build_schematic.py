@@ -85,6 +85,31 @@ def build() -> Schematic:
     sch.net(boost, "6", "VBATT")  # BAT pin -- pin 1 (VIN) unused, see README.md
     sch.power_pin(boost, "9", "GND")  # exposed PowerPAD -- the part's only ground, see README.md
     sch.power_pin(boost, "8", "+5V")
+    # Boost/charge inductor -- per the IP5306 datasheet's own "Typical
+    # Application Schematic" (Figure 7): a single 1uH inductor bridges SW
+    # (pin 7) to BAT (pin 6), shared between the buck charger and the boost
+    # discharger. Without it the boost path (BAT -> VOUT) cannot function --
+    # see README.md.
+    boost_l = sch.place("Device:L", "L", "1uH", 55, 100, footprint_override="Inductor_SMD:L_6.3x6.3_H3")
+    sch.net(boost, "7", "IP5306_SW")
+    sch.net(boost_l, "1", "IP5306_SW")
+    sch.net(boost_l, "2", "VBATT")
+    # RC snubber (R4/C2 in the datasheet figure) from the SW node to GND,
+    # damping switching ringing -- small-signal only, not in the main
+    # current path, so a standard 0603/0603 pair is fine here even though
+    # the inductor itself carries boost-converter-level current.
+    snub_r = sch.place("Device:R", "R", "0.5R", 45, 95, footprint_override="Resistor_SMD:R_0603_1608Metric")
+    snub_c = sch.place("Device:C", "C", "22uF", 45, 105, footprint_override="Capacitor_SMD:C_0805_2012Metric")
+    sch.net(snub_r, "1", "IP5306_SW")
+    sch.net(snub_r, "2", "SNUBBER_MID")
+    sch.net(snub_c, "1", "SNUBBER_MID")
+    sch.power_pin(snub_c, "2", "GND")
+    # VOUT decoupling at the IC -- the datasheet figure uses a 4x22uF bank;
+    # simplified to one here (see README.md), same simplification style as
+    # the mono audio path elsewhere in this design.
+    vout_c = sch.place("Device:C", "C", "22uF", 80, 105, footprint_override="Capacitor_SMD:C_0805_2012Metric")
+    sch.power_pin(vout_c, "1", "+5V")
+    sch.power_pin(vout_c, "2", "GND")
     key_sw = sch.place("Switch:SW_Push", "SW", "PWR_KEY", 90, 90, footprint_override="Button_Switch_THT:SW_PUSH_6mm_H4.3mm")
     sch.net(boost, "5", "PWR_KEY")
     sch.net(key_sw, "1", "PWR_KEY")
@@ -378,13 +403,6 @@ def build() -> Schematic:
     sch.no_connect(boost, "1")  # IP5306 VIN -- unused, charging handled separately by U1 (MCP73831)
     sch.no_connect(boost, "3")  # IP5306 LED2 -- one battery-level LED (pin 2) is enough
     sch.no_connect(boost, "4")  # IP5306 LED3 -- one battery-level LED (pin 2) is enough
-    # IP5306 SW (pin 7, the DCDC switch node) is marked no_connect, but that's
-    # a real design gap, not an intentional choice: the datasheet's own
-    # application schematic runs SW through an external inductor to VOUT --
-    # without that inductor the boost converter (BAT -> VOUT) can't function.
-    # No inductor exists anywhere in this design yet. Needs a follow-up
-    # before this circuit is trusted, see README.md.
-    sch.no_connect(boost, "7")
 
     return sch
 

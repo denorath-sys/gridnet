@@ -13,11 +13,12 @@ the display, keyboard controller, keyboard backlight, and speaker.
 
 Alongside it, `main-board.kicad_pcb` has every part placed within the
 100x80mm board outline from hardware/bom.md and **fully routed**, 2
-layers (F.Cu/B.Cu), **171 of 171 connections**, against the
-datasheet-corrected netlist described below. `kicad-cli pcb drc` comes
-back with only the pre-existing, already-understood `drill_out_of_range`
-warnings (see "Regenerating / validating" below) — no unconnected items,
-no clearance violations.
+layers (F.Cu/B.Cu), against the datasheet-corrected netlist described
+below plus the IP5306 boost inductor added after it (see "IP5306 boost
+inductor" below) — every net routed, `kicad-cli pcb drc` comes back with
+only the pre-existing, already-understood `drill_out_of_range` warnings
+(see "Regenerating / validating" below), no unconnected items, no
+clearance violations.
 
 This regenerates a PCB that was previously routed against a *wrong*
 netlist. The datasheet verification pass described below fixed real
@@ -103,24 +104,51 @@ symbol had. Three of the four were substantially wrong:
   the DCDC switch node). It had also invented two `GND` pins (old 3 and
   6) that don't exist — the real IP5306 only has one ground reference,
   the exposed PowerPAD, which is now modeled as pin 9. Fixing this
-  surfaced a real design gap, not just a labeling one: the datasheet's
-  own application schematic runs `SW` through an external inductor to
-  `VOUT` to make the boost converter work, and **no inductor exists
-  anywhere in this design**. `SW` is marked `no_connect` with a comment
-  flagging this rather than silently wired to nothing — the IP5306's
-  boost path (`BAT` -> `VOUT`) will not actually function until an
-  inductor is added. Needs a follow-up pass, not fabrication-ready as is.
+  surfaced a real design gap, not just a labeling one: **no inductor
+  existed anywhere in this design**, and without one on `SW` the boost
+  path (`BAT` -> `VOUT`) can't function. This has since been fixed — see
+  "IP5306 boost inductor" below.
 - **23LC1024.** Checked as a control/sanity case — it was already
   correct, all 8 pins matched Microchip's datasheet exactly.
 
-**What regenerating the PCB against this fix requires** (not done in
-this pass): re-run `kicad-cli sch export netlist`, re-run `build_pcb.py`
-(placement is driven by reference designator + footprint, so component
-*positions* shouldn't move, but every pad's *net assignment* on the MCU,
-the ESP32-C3 module, and the IP5306 needs to come from the corrected
-netlist), then re-route — the existing copper was routed against the old
-netlist and can't just be relabeled in place. See "Routing" below for
-what the existing routing pass looked like; expect to repeat it.
+**Regenerating the PCB against this fix.** Done in a follow-up pass: netlist
+re-exported, `build_pcb.py` re-run (placement is driven by reference
+designator + footprint, so component *positions* didn't move, but every
+pad's *net assignment* on the MCU, the ESP32-C3 module, and the IP5306
+came from the corrected netlist this time), then re-routed from scratch
+— the old copper was routed against the old netlist and couldn't just be
+relabeled in place. See "Routing" below for how that pass went.
+
+IP5306 boost inductor
+----------------------
+
+Fixed as a follow-up to the pin-numbering bug above. The IP5306
+datasheet's own "Typical Application Schematic" (Figure 7) shows the
+boost/charge inductor bridging `SW` (pin 7) directly to `BAT` (pin 6) —
+**not** to `VOUT` as an earlier read of this design guessed; the
+`SW`-`BAT` inductor is shared between the buck charger and the boost
+discharger, and `VOUT` (pin 8) is a separate internally-switched output.
+Added per that reference circuit:
+
+- **L1, 1uH** (`Inductor_SMD:L_6.3x6.3_H3` — a generic shielded power
+  inductor footprint, not a specific vendor part; the datasheet doesn't
+  specify one either) between `SW` and `BAT`/`/VBATT`.
+- **R14 (0.5R) + C4 (22uF) in series**, from the `SW`/`L1` junction to
+  GND — the datasheet's `R4`/`C2`, a small RC snubber damping switching
+  ringing on the `SW` node. This carries only transient ringing current,
+  not the inductor's main current, so a standard 0603/0805 pair is fine
+  even though the inductor itself is a boost-converter-current part.
+- **C5, 22uF** at `VOUT`/`+5V`, directly at the IC — the datasheet's
+  figure uses a 4x22uF bank there; simplified to one cap here, the same
+  simplification style already used for the mono audio path elsewhere in
+  this design.
+
+All three are new components (`kicad_gen/build_pcb.py`'s `PLACEMENT`
+dict didn't have coordinates for them yet, since they didn't exist before
+this pass) — placed in the open board area below the MCU cluster
+(`kicad_gen/build_pcb.py`, `L1`/`R14`/`C4`/`C5`), not the power-tree
+column, because the CR2032 holder's real courtyard already fills that
+column from y=50 down (see "PCB placement notes" below).
 
 Design assumptions (things this schematic decided that the BOM/docs didn't
 spell out)
@@ -141,9 +169,9 @@ spell out)
   it only for its 5V boost path (BAT -> VOUT) and handles Li-ion charging
   separately with a dedicated MCP73831. IP5306's own charge-input pin
   (VIN) is marked `no_connect` rather than wired to VBUS, to avoid two
-  charge controllers fighting over the same battery. Note: the boost path
-  itself needs an inductor on `SW` that doesn't exist in this design yet
-  — see "Datasheet verification results" above.
+  charge controllers fighting over the same battery. The boost path
+  itself runs through `L1`, a 1uH inductor on `SW` shared with the
+  charger — see "IP5306 boost inductor" above.
 - **Mono audio.** PAM8403D is a stereo amplifier, but hardware/bom.md
   specs one 1W/8Ω speaker. INL, INR, and VREF are all tied to the same
   filtered PWM node, and only the left channel output (LOUT+/LOUT-) is
@@ -199,12 +227,12 @@ kicad-cli sch erc main-board.kicad_sch --format json -o /tmp/erc.json
 kicad-cli sch export svg main-board.kicad_sch -o /tmp/render/
 ```
 
-Current ERC result (after the datasheet-verification pin fixes above):
-**320 violations, 0 errors.** All remaining warnings are benign /
-expected in a headless-generated schematic without a full project
-sym-lib-table registered:
+Current ERC result (after the datasheet-verification pin fixes and the
+IP5306 inductor addition above): **336 violations, 0 errors.** All
+remaining warnings are benign / expected in a headless-generated
+schematic without a full project sym-lib-table registered:
 
-- `endpoint_off_grid` (306) — cosmetic, wire/pin endpoints not snapped to
+- `endpoint_off_grid` (322) — cosmetic, wire/pin endpoints not snapped to
   KiCad's visual grid
 - `lib_symbol_issues` (10) — artifact of validating without this
   environment's full symbol-library table registered
@@ -236,7 +264,7 @@ placeholder's own hole spec, not a placement or routing mistake.
 Building a real MINI-1U footprint from its datasheet resolves this.
 Courtyard overlaps, net-shorting, clearance violations, and unconnected
 items — the categories that would actually indicate a *placement* or
-*routing* bug — are all clean (0). 171 of 171 nets routed; see "Routing"
+*routing* bug — are all clean (0). All 87 nets routed; see "Routing"
 below for how the one net Freerouting couldn't finish (`/USB_DN`, not
 `/DISP_CS` this time) got completed by hand.
 
@@ -272,13 +300,15 @@ board.Save('main-board.kicad_pcb')
 "
 ```
 
-Result: **170 of 171 connections auto-routed** in 7 passes (~18 seconds,
-started from 164 unrouted nets — the rest were already single-node or
-otherwise trivially connected by placement). The one holdout this time
-was `/USB_DN`, between USB-C receptacle `J1`'s pins `A7` and `B7` (the
-two mirrored D- pins, 1mm apart) — not `/DISP_CS`, which routed cleanly
-this time. See "Why `/DISP_CS` routed fine this time" below for why the
-previous pass's holdout doesn't recur.
+Result (final pass, after the IP5306 inductor components were added --
+see "IP5306 boost inductor" above): **170 of 171 nets auto-routed** in 7
+passes (~20 seconds). The one holdout was `/USB_DN`, between USB-C
+receptacle `J1`'s pins `A7` and `B7` (the two mirrored D- pins, 1mm
+apart) — not `/DISP_CS`, which routed cleanly both this time and in the
+pass before the inductor was added. See "Why `/DISP_CS` routed fine this
+time" below for why the previous PCB revision's holdout doesn't recur.
+(The new inductor/snubber/decoupling nets — `/IP5306_SW`, `/SNUBBER_MID`,
+and the `/VBATT`/`+5V` extensions — all routed without incident.)
 
 **Finishing `/USB_DN` by hand.** `J1`'s 24 signal pins are SMD gull-wing
 pads on a 0.5mm pitch, each 1.45mm wide — the same kind of tight
@@ -349,14 +379,14 @@ What's not done yet
   Freerouting respects clearance/courtyard rules (DRC confirms this), but
   it optimizes for "routed and DRC-clean," not for the judgment calls a
   human layout engineer would make — trace-width choices on
-  higher-current nets (VBATT, +5V, the battery charge path), via
-  placement near the antenna path, and return-path continuity for the
-  SPI/I2C buses are all worth a manual pass before this goes to fab.
-- **An inductor for the IP5306's boost converter.** Datasheet
-  verification (see above) found the schematic never wired the IP5306's
-  `SW` pin — the boost path (`BAT` -> `VOUT`) can't function without an
-  inductor there. Needs a part (value/footprint per the datasheet's
-  application circuit) and a schematic/PCB update, not just a pin fix.
+  higher-current nets are the big one now that the IP5306 boost inductor
+  exists: `/IP5306_SW` and the `L1`-side extension of `/VBATT` carry
+  boost-converter current (up to 2.4A per the datasheet) but were
+  auto-routed at the board's default 0.2mm track width like everything
+  else, which is undersized for that current. VBATT, +5V, and the
+  battery charge path generally, via placement near the antenna path,
+  and return-path continuity for the SPI/I2C buses are all worth a
+  manual pass before this goes to fab.
 - **A real footprint for the ESP32-C3-MINI-1U module** (currently a
   same-family WROOM-02U placeholder) — required before this design is
   fabricated.
