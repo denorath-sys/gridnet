@@ -267,8 +267,13 @@ def build() -> Schematic:
 
     esp = sch.place("gridnet_parts:ESP32-C3-MINI-1U", "U", "ESP32-C3-MINI-1U", 350, 60)
     sch.net(esp, "3", "+3V3_RF")
-    sch.power_pin(esp, "1", "GND")
-    sch.power_pin(esp, "2", "GND")
+    # Every real GND pad (Table 3-1: 1, 2, 11, 14, 36-53), not just 1/2 --
+    # see README.md's "Real ESP32-C3-MINI-1U footprint" for why this used to
+    # be half-done. Pin 49 is the thermal-pad array (9 physical pads sharing
+    # this one number in the footprint, see build_library.py).
+    for p in ("1", "2", "11", "14", "36", "37", "38", "39", "40", "41", "42",
+              "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53"):
+        sch.power_pin(esp, p, "GND")
     en_r = sch.place("Device:R", "R", "10k", 335, 45, footprint_override="Resistor_SMD:R_0603_1608Metric")
     sch.net(esp, "8", "ESP_EN")
     sch.net(en_r, "1", "ESP_EN")

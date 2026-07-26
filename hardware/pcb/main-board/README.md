@@ -183,19 +183,31 @@ problem, but real DRC errors regardless). Regenerating placement +
 routing against it: **0 DRC violations, 0 unconnected items** — the
 first fully clean `kicad-cli pcb drc` run this board has had.
 
-**New finding, not yet addressed.** The real footprint's other 34 pads
-that the schematic symbol doesn't draw (additional `GND` pins beyond
-the two already wired, and all the `NC` pins) come back from
-`build_pcb.py` as "no matching net" — expected, since the schematic
-only represents the pins this design actually uses (see the confidence
-table above). But Espressif's hardware design guidelines for this module
-generally recommend tying *all* GND pads, including the thermal-pad
-array under pin 49, to the ground plane for RF and thermal performance,
-not just the couple the schematic wires. This design doesn't do that yet
-— worth a follow-up pass (adding the remaining GND pins to the schematic
-symbol and wiring them, and stitching the thermal pad to a ground pour)
-before treating the RF/thermal performance of this module placement as
-finished.
+**Update: the remaining GND pads are now grounded** (fixed as a
+follow-up to the finding above). The custom symbol only drew 2 of the
+module's real ~22 `GND` pin numbers (30 physical pads once the pin-49
+thermal array's 9 copper islands are counted individually); Espressif's
+hardware design guidelines for this module recommend tying all of them
+to the ground plane for RF and thermal performance. `kicad_gen/build_library.py`'s
+`ESP32-C3-MINI-1U` symbol now draws every real `GND` pin from Table 3-1
+(`1, 2, 11, 14, 36-53`, pin 49 being the 3x3 thermal-pad array —
+wiring that one symbol pin to `GND` grounds all 9 physical pads, since
+they share the pad number in the footprint), all wired to `GND` in
+`build_schematic.py`. Only the module's 14 genuinely `NC` pads
+(`4, 7, 9, 10, 15, 17, 24, 25, 28, 29, 32-35`) are still undrawn — there's
+nothing to connect them to.
+
+Regenerated schematic (ERC clean) and PCB (fresh placement, fresh
+Freerouting pass — this run completed all 192 nets with no manual
+finishing needed, unlike the two PCB regenerations before it) against
+this: **0 DRC violations, 0 unconnected items**, all 30 of `U9`'s `GND`
+pads confirmed on the `GND` net. What this doesn't do yet: an actual
+copper ground *pour/zone* stitched to the thermal pad with a proper
+via array for heat dissipation — the pads are now electrically grounded
+via ordinary routed traces, which satisfies connectivity but not the
+full thermal-performance intent of Espressif's guidance. That's a
+separate, more involved PCB-editor task (zone definition, fill,
+clearance-checked against neighboring copper) left for a future pass.
 
 Design assumptions (things this schematic decided that the BOM/docs didn't
 spell out)
@@ -275,12 +287,12 @@ kicad-cli sch export svg main-board.kicad_sch -o /tmp/render/
 ```
 
 Current ERC result (after the datasheet-verification pin fixes, the
-IP5306 inductor addition, and the real ESP32-C3-MINI-1U footprint above):
-**337 violations, 0 errors.** All remaining warnings are benign /
-expected in a headless-generated schematic without a full project
-sym-lib-table registered:
+IP5306 inductor addition, the real ESP32-C3-MINI-1U footprint, and
+grounding its remaining GND pads above): **377 violations, 0 errors.**
+All remaining warnings are benign / expected in a headless-generated
+schematic without a full project sym-lib-table registered:
 
-- `endpoint_off_grid` (322) — cosmetic, wire/pin endpoints not snapped to
+- `endpoint_off_grid` (362) — cosmetic, wire/pin endpoints not snapped to
   KiCad's visual grid
 - `lib_symbol_issues` (10) — artifact of validating without this
   environment's full symbol-library table registered
@@ -312,10 +324,9 @@ earlier in this document's history are gone — they traced entirely to
 the WROOM-02U placeholder footprint's own 0.2mm holes against KiCad's
 0.3mm minimum rule (see "Real ESP32-C3-MINI-1U footprint" above), not a
 placement or routing mistake, and the real footprint doesn't have that
-problem. This is the first fully clean `kicad-cli pcb drc` run this
-board has had. All 87 nets routed; see "Routing" below for how the one
-net Freerouting couldn't finish (`/USB_DN`, not `/DISP_CS`) got
-completed by hand.
+problem. All 87 nets routed, including all 30 of `U9`'s now-wired `GND`
+pads; see "Routing" below for how the routing pass went this time
+(cleanly — no net needed finishing by hand).
 
 Routing
 -------
@@ -349,15 +360,23 @@ board.Save('main-board.kicad_pcb')
 "
 ```
 
-Result (final pass, after the IP5306 inductor components were added --
-see "IP5306 boost inductor" above): **170 of 171 nets auto-routed** in 7
-passes (~20 seconds). The one holdout was `/USB_DN`, between USB-C
-receptacle `J1`'s pins `A7` and `B7` (the two mirrored D- pins, 1mm
-apart) — not `/DISP_CS`, which routed cleanly both this time and in the
-pass before the inductor was added. See "Why `/DISP_CS` routed fine this
-time" below for why the previous PCB revision's holdout doesn't recur.
-(The new inductor/snubber/decoupling nets — `/IP5306_SW`, `/SNUBBER_MID`,
-and the `/VBATT`/`+5V` extensions — all routed without incident.)
+Result (current pass, after grounding the ESP32-C3-MINI-1U's remaining
+GND pads — see "Real ESP32-C3-MINI-1U footprint" above): **all 192 nets
+auto-routed**, nothing left to finish by hand, in 6 passes (~31 seconds).
+This is the first PCB regeneration in this board's history where
+Freerouting didn't get stuck on anything — the extra GND connectivity
+apparently gave the router more slack, not less; `/USB_DN` (the previous
+pass's holdout, described below for how it was fixed when it did get
+stuck) and `/DISP_CS` (the original PCB's holdout, see further below)
+both routed cleanly on the first pass.
+
+The two write-ups below (finishing `/USB_DN` by hand, and why `/DISP_CS`
+stopped being a problem) describe the *previous* two PCB regenerations,
+kept for the diagnostic reasoning even though neither net needed manual
+help this time. If a future regeneration gets stuck again, that
+reasoning — and the fact that the stuck net keeps changing between
+regenerations — is worth re-reading before assuming it's the same root
+cause.
 
 **Finishing `/USB_DN` by hand.** `J1`'s 24 signal pins are SMD gull-wing
 pads on a 0.5mm pitch, each 1.45mm wide — the same kind of tight
@@ -410,16 +429,13 @@ PCB placement notes
   consistently mean "courtyard center" regardless of the footprint's own
   quirks — a real, repeatable bug (not just a cosmetic one) found and
   fixed while placing the two on-board header rows.
-- **`no matching net` is expected for `J5`, `J1`, and now `U9`.** `J5`
-  (microSD) and `J1` (USB-C) each have a few real footprint pads (shield
-  tabs, mechanical/detect pins) with no counterpart in the schematic's
-  simpler symbol — harmless. `U9` now uses the real MINI-1U footprint
-  (see "Real ESP32-C3-MINI-1U footprint" above), which has 53 pads
-  against the schematic symbol's 19 — the other 34 (mostly `GND`/`NC`)
-  come back unmatched by design, not because of a placeholder mismatch
-  anymore. See that section's "New finding, not yet addressed" for why
-  that's still worth a follow-up (Espressif recommends grounding all of
-  them, not just the two this design wires).
+- **`no matching net` is expected for `J5` and `J1`.** Each has a few
+  real footprint pads (shield tabs, mechanical/detect pins) with no
+  counterpart in the schematic's simpler symbol — harmless. `U9` (the
+  ESP32-C3-MINI-1U) used to be in this list too, for 34 unmatched pads;
+  now that every real `GND` pin is drawn and wired (see "Real
+  ESP32-C3-MINI-1U footprint" above), only its 14 genuinely `NC` pads
+  are unmatched, which is correct — there's nothing to wire them to.
 
 What's not done yet
 --------------------
@@ -436,11 +452,13 @@ What's not done yet
   battery charge path generally, via placement near the antenna path,
   and return-path continuity for the SPI/I2C buses are all worth a
   manual pass before this goes to fab.
-- **Ground the ESP32-C3-MINI-1U's remaining GND/thermal pads.** See
-  "Real ESP32-C3-MINI-1U footprint" above — the schematic only wires 2
-  of the module's real ~19 GND pads and doesn't stitch the thermal-pad
-  via array to a ground pour; Espressif's guidance recommends grounding
-  all of them for RF/thermal performance.
+- **A real ground pour/zone under the ESP32-C3-MINI-1U's thermal pad.**
+  All 30 of the module's `GND` pads (including the 9-pad thermal array)
+  are now electrically grounded via ordinary routed traces — see "Real
+  ESP32-C3-MINI-1U footprint" above — but Espressif's guidance also
+  expects a proper copper pour/zone stitched to the thermal pad for full
+  RF/thermal performance, which is a separate PCB-editor task (zone
+  definition, fill, clearance against neighboring copper) not done here.
 - A second schematic sheet (and PCB) for the PLC/Power Board and PLC
   Adapter (see hardware/bom.md's Board 1 and "PLC Adapter" sections) — out
   of scope for this pass, which covers Board 2 (Main Board) only.
