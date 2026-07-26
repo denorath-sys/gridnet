@@ -217,12 +217,12 @@ This is the same principle used by HomePlug adapters deployed in millions of hom
 | Inverter master protocol | ✅ Complete |
 | Protection circuit topology (TVS + MOV + relay) | ✅ Complete — topology and parts selected ([`hardware/bom.md`](hardware/bom.md)); not yet a drawn schematic |
 | Main Board schematic + PCB layout ([`hardware/pcb/main-board`](hardware/pcb/main-board)) | 🔄 Schematic's custom parts are now datasheet-verified (3 of 4 had wrong pin numbers, now fixed — see that directory's README) but the routed PCB predates the fix and needs to be regenerated + re-routed against the corrected netlist before it's trustworthy |
-| PLC/Power Board + PLC Adapter schematic + PCB (BOM's Board 1) | 📋 Planned — no schematic or layout file exists yet (`hardware/schematics/README.md` says the same) |
+| PLC/Power Board (BOM's Board 1, the PLC Adapter's PCB — see [`hardware/pcb/plc-board`](hardware/pcb/plc-board)) | 🔄 Schematic done for the well-specified parts (ST7580 digital/control/power, ESP32-C3, mains protection, AC-DC supply), ERC-clean. The inverter and the ST7580's PA/line-coupling section need power-electronics design this project's docs don't specify yet (no gate driver, no 8-18V rail, no defined topology) — deliberately left unbuilt rather than guessed at, see that directory's README. No PCB layout yet. |
 | Case design (CAD) | 📋 Planned — only target external dimensions exist (see Hardware Overview); no CAD model |
 | Software architecture (Zephyr + Forth VM) | ✅ Complete |
 | Electrical safety analysis | ✅ Complete |
 | Protocol & Forth VM reference prototypes ([`tools/`](tools/), Python, pre-hardware validation) | ✅ Complete |
-| **PCB fabrication / Hardware prototype** | 🔄 Next step — Main Board PCB needs a full regeneration + re-route against the datasheet-corrected netlist (see that directory's README); Board 1 schematic/layout still to do |
+| **PCB fabrication / Hardware prototype** | 🔄 Next step — Main Board is routed and DRC-clean, ready for a design review pass before fab. Board 1 needs its inverter/PA power electronics designed before its own layout can start meaningfully |
 | Embedded firmware (Zephyr, on real hardware) | 📋 Planned — starts after PCB prototype |
 | Field testing | 📋 Planned |
 
@@ -236,9 +236,9 @@ gridnet/
 ├── LICENSE                    (CERN-OHL-W-2.0)
 ├── CONTRIBUTING.md
 ├── hardware/
-│   ├── schematics/            (placeholder — Board 1 (PLC/Power) not yet added, see its README)
 │   ├── pcb/
-│   │   └── main-board/        (Board 2 — KiCad schematic + routed PCB, see its README)
+│   │   ├── main-board/         (Board 2 — KiCad schematic + routed PCB, see its README)
+│   │   └── plc-board/          (Board 1 — KiCad schematic, no PCB layout yet, see its README)
 │   └── bom.md                 (bill of materials)
 ├── docs/
 │   ├── protocol.md            (full protocol stack)
@@ -255,10 +255,9 @@ gridnet/
     └── logo-silver.svg
 ```
 
-Note: `hardware/case/` isn't in the tree above because it doesn't exist yet
-— see the Project Status table above. `hardware/pcb/` currently covers only
-the Main Board (Board 2); the PLC/Power Board (Board 1) still lives in
-`hardware/schematics/` as a placeholder.
+Note: `hardware/case/` and `hardware/schematics/` (now just a pointer to
+`hardware/pcb/`) aren't in the tree above because there's nothing under
+either yet worth listing — see the Project Status table above.
 
 ---
 

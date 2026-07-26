@@ -8,7 +8,7 @@ assumes (an antenna connector with nothing behind it). See "Design Notes —
 REV History" at the bottom of this file for what changed and why.
 
 Board 1 — PLC / Power Board (100×80mm)
-#ComponentPart NumberDescriptionQtyUnit Cost (USD)Total1PLC SoCST7580CENELEC EN50065, OFDM/FSK, 9–148kHz1$5.70$5.702MOSFETIRF540NN-channel, 100V/33A — DC-AC inverter2$0.80$1.603TVS DiodeP6KE250CABidirectional, 250V — surge protection1$0.60$0.604MOVS20K275275V varistor — overvoltage protection1$0.40$0.405RelayHK19F-DC5V5V coil, 250VAC/10A — line isolation1$0.80$0.806OptocouplerPC817Signal isolation, 5kV2$0.15$0.307SMPS ModuleHLK-5M05230VAC → 5VDC, 1A1$3.50$3.508Coupling transformerWürth Elektronik WE-PLCC seriesPLC line coupling, 1:1, CENELEC A-band — confirm exact part against ST7580 application note before ordering (REV 0.4 left this unspecified)1$2.00$2.009Connector J1—2×8 pin, 2.54mm — main board interface1$0.30$0.3010Passive components—Resistors, capacitors, ferrite beads—$1.50$1.50Board 1 Total~$16.70
+#ComponentPart NumberDescriptionQtyUnit Cost (USD)Total1PLC SoCST7580CENELEC EN50065, OFDM/FSK, 9–148kHz1$5.70$5.702MOSFETIRF540NN-channel, 100V/33A — DC-AC inverter2$0.80$1.603TVS DiodeP6KE250CABidirectional, 250V — surge protection1$0.60$0.604MOVS20K275275V varistor — overvoltage protection1$0.40$0.405RelayHK19F-DC5V5V coil, 250VAC/10A — line isolation1$0.80$0.806OptocouplerPC817Signal isolation, 5kV2$0.15$0.307SMPS ModuleHLK-5M05230VAC → 5VDC, 1A1$3.50$3.508Coupling transformerWürth Elektronik WE-PLCC seriesPLC line coupling, 1:1, CENELEC A-band — confirm exact part against ST7580 application note before ordering (REV 0.4 left this unspecified)1$2.00$2.009Connector J1—2×8 pin, 2.54mm — this board's own interface header (Schuko-plug wiring, status LEDs); "main board" here means Board 1 is the PLC Adapter's own main/only board, not a connection to Board 2 — the two products don't connect to each other, see the top-level README's Hardware Overview1$0.30$0.3010Passive components—Resistors, capacitors, ferrite beads—$1.50$1.50Board 1 Total~$16.70
 
 Board 2 — Main Board (100×80mm)
 #ComponentPart NumberDescriptionQtyUnit Cost (USD)Total1MCUGD32VF103CCT6RISC-V, 108MHz, 32KB RAM, 256KB Flash — same 48-pin package/pinout as REV 0.4's CBT6, next density step up (REV 0.4's README claimed 1MB Flash, which no GD32VF103 variant actually offers; 256KB is the real ceiling in this pin-compatible family)1$1.80$1.802Wi-Fi / BT ModuleESP32-C3-MINI-1UWi-Fi 2.4GHz mesh + Bluetooth 5.0 LE — "U" variant, has the U.FL connector REV 0.4's plain MINI-1 lacks (see item 14)1$0.80$0.803SRAM23LC10241Mb SPI SRAM1$1.20$1.204FlashW25Q64JVSSIQ8MB SPI NOR Flash1$0.60$0.605RTCDS3231SNI2C RTC, ±2ppm accuracy1$1.80$1.806RTC BatteryCR20323V coin cell1$0.30$0.307LiPo chargerMCP73831Single-cell LiPo charge controller1$0.50$0.508Boost converterIP53065V boost + battery management1$0.60$0.609LDOAMS1117-3.33.3V LDO regulator2$0.15$0.3010AmplifierPAM84033W class-D audio amplifier1$0.40$0.4011microSD socket—SPI, push-push type1$0.50$0.5012USB-C connector—Power input, DFU firmware update1$0.40$0.4013SMA connector—External antenna, edge mount1$0.80$0.8014U.FL-to-SMA pigtail—~100mm, connects item 2's U.FL port to item 13's SMA connector (REV 0.4 had the SMA connector with nothing behind it — MINI-1 has no antenna connector at all)1$0.60$0.6015Crystal8MHz HC49/SMD + 2×20pF load capsGD32VF103 HSE clock reference1$0.15$0.1516Passive components—Resistors, capacitors, inductors—$1.50$1.50Board 2 Total~$12.25
@@ -23,7 +23,7 @@ Enclosure
 #ComponentDescriptionQtyUnit Cost (USD)Total1Top caseMat black ABS-PC, clamshell lid1$8.00$8.002Bottom caseMat black ABS-PC, keyboard base1$8.00$8.003Hinge assemblySteel, 135° stop, ×21 set$3.00$3.004Corner bumpersTPU rubber, ×41 set$1.00$1.005Screws & insertsM2 screws + brass inserts1 set$1.50$1.50Enclosure Total~$21.50
 
 PLC Adapter (Separate Unit)
-#ComponentPart NumberDescriptionQtyUnit Cost (USD)Total1PLC SoCST7580CENELEC EN50065, OFDM/FSK1$5.70$5.702Wi-Fi ModuleESP32-C3-MINI-1Wi-Fi AP for terminal connection1$0.80$0.803SMPSHLK-5M05230VAC → 5VDC1$3.50$3.504Inverter MOSFETsIRF540NDC-AC, 24V AC injection2$0.80$1.605Protection circuitTVS + MOV + relaySame as Board 11 set$2.00$2.006Schuko plug—Direct wall mount, 230V1$1.50$1.507EnclosureMat black ABSCompact square, ~80×80×40mm1$3.00$3.008LEDs—3× status LED (Power/PLC/WiFi)3$0.10$0.309Passive components—Resistors, capacitors—$1.00$1.00Adapter Total~$19.40
+#ComponentPart NumberDescriptionQtyUnit Cost (USD)Total1PLC SoCST7580CENELEC EN50065, OFDM/FSK1$5.70$5.702Wi-Fi ModuleESP32-C3-MINI-1Wi-Fi AP for terminal connection1$0.80$0.803SMPSHLK-5M05230VAC → 5VDC1$3.50$3.504Inverter MOSFETsIRF540NDC-AC, 24V AC injection2$0.80$1.605Protection circuitTVS + MOV + relaySame as Board 11 set$2.00$2.006Schuko plug—Direct wall mount, 230V1$1.50$1.507EnclosureMat black ABSCompact square, ~110×90×30mm — sized for Board 1's 100×80mm PCB plus the Schuko plug and wall clearance; REV 0.4's ~80×80×40mm estimate predates that PCB size and never got reconciled against it, unlike the other REV 0.4 numbers listed in "Design Notes — REV History" below1$3.00$3.008LEDs—3× status LED (Power/PLC/WiFi)3$0.10$0.309Passive components—Resistors, capacitors—$1.00$1.00Adapter Total~$19.40
 
 PCB Manufacturing (JLCPCB, 5 units each)
 BoardSizeLayersQtyCostPLC / Power Board100×80mm25 pcs~$8.00Main Board100×80mm25 pcs~$8.00Adapter Board70×60mm25 pcs~$5.00PCB Total~$21.00
@@ -83,6 +83,18 @@ judgment call:
    different wiring. The part class that's actually sourced for DIY
    keyboard builds is analog/ADC-compatible, matching the firmware doc; only
    the BOM's description was wrong, not the part.
+6. PLC Adapter enclosure sized for a different PCB than the one in its own
+   BOM. Board 1 (the PLC Adapter's PCB) is spec'd at 100×80mm, but the
+   Adapter's enclosure line said "~80×80×40mm" — physically too small to
+   hold that PCB. Unlike items 1-5 above, this one wasn't part of the
+   original REV 0.5 pass; caught later, once Board 1's schematic work
+   started. Fixed to ~110×90×30mm (fits the PCB plus the Schuko plug and
+   wall clearance). Also clarified Board 1's `J1` connector description —
+   "main board interface" read as if it connected to Board 2 (the Terminal's
+   Main Board), but Board 1 and Board 2 are different products that never
+   connect to each other (see the top-level README's Hardware Overview);
+   `J1` is this board's own interface to the Adapter's Schuko-plug wiring
+   and status LEDs.
 
 Also added two REV 0.4 omissions that would have blocked fabrication
 regardless: an explicit crystal for the GD32VF103's clock (was silently
