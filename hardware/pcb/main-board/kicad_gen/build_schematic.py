@@ -26,6 +26,7 @@ def build() -> Schematic:
     usb = sch.place(
         "Connector:USB_C_Receptacle_USB2.0_14P", "J", "USB-C",
         30, 40, footprint_override="Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12",
+        ref="J1",
     )
     sch.pwr_flag(usb, "A4", "VBUS")  # externally-sourced net (whatever's on the other end of the cable)
     sch.bare_pwr_flag(15, 40, "GND")  # GND has no power_out-type pin anywhere in this design; see README.md
@@ -48,26 +49,26 @@ def build() -> Schematic:
     sch.net(usb, "B7", "USB_DN")
     # CC1/CC2: fixed 5.1k to GND each, the standard "this is a UFP sink"
     # strapping so a USB-C charger/host offers 5V.
-    cc1 = sch.place("Device:R", "R", "5.1k", 30, 95, footprint_override="Resistor_SMD:R_0603_1608Metric")
+    cc1 = sch.place("Device:R", "R", "5.1k", 30, 95, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R1")
     sch.net(usb, "A5", "CC1")
     sch.net(cc1, "1", "CC1")
     sch.power_pin(cc1, "2", "GND")
-    cc2 = sch.place("Device:R", "R", "5.1k", 50, 95, footprint_override="Resistor_SMD:R_0603_1608Metric")
+    cc2 = sch.place("Device:R", "R", "5.1k", 50, 95, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R2")
     sch.net(usb, "B5", "CC2")
     sch.net(cc2, "1", "CC2")
     sch.power_pin(cc2, "2", "GND")
 
-    charger = sch.place("gridnet_parts:MCP73831-2-OT", "U", "MCP73831-2-OT", 70, 45)
+    charger = sch.place("gridnet_parts:MCP73831-2-OT", "U", "MCP73831-2-OT", 70, 45, ref="U1")
     sch.power_pin(charger, "4", "VBUS")
     sch.power_pin(charger, "2", "GND")
     sch.net(charger, "3", "VBATT")
     # 2k sets ~450mA charge current -- confirm against target cell C-rate (see README.md)
-    prog_r = sch.place("Device:R", "R", "2k", 70, 65, footprint_override="Resistor_SMD:R_0603_1608Metric")
+    prog_r = sch.place("Device:R", "R", "2k", 70, 65, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R3")
     sch.net(charger, "5", "CHG_PROG")
     sch.net(prog_r, "1", "CHG_PROG")
     sch.power_pin(prog_r, "2", "GND")
-    chg_led = sch.place("Device:LED", "D", "LED (amber)", 90, 45, footprint_override="LED_SMD:LED_0603_1608Metric")
-    chg_led_r = sch.place("Device:R", "R", "1k", 90, 55, footprint_override="Resistor_SMD:R_0603_1608Metric")
+    chg_led = sch.place("Device:LED", "D", "LED (amber)", 90, 45, footprint_override="LED_SMD:LED_0603_1608Metric", ref="D1")
+    chg_led_r = sch.place("Device:R", "R", "1k", 90, 55, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R4")
     sch.net(charger, "1", "CHG_STAT")
     sch.net(chg_led, "2", "CHG_STAT")
     sch.net(chg_led, "1", "CHG_LED_R")
@@ -77,11 +78,12 @@ def build() -> Schematic:
     battery = sch.place(
         "Connector_Generic:Conn_01x02", "J", "BATT_2x18650_PARALLEL", 30, 90,
         footprint_override="Connector_JST:JST_PH_B2B-PH-K_1x02_P2.00mm_Vertical",
+        ref="J2",
     )
     sch.net(battery, "1", "VBATT")  # driven by U1 (MCP73831) pin 3, VBAT (power_out) -- no flag needed
     sch.power_pin(battery, "2", "GND")
 
-    boost = sch.place("gridnet_parts:IP5306", "U", "IP5306", 70, 90)
+    boost = sch.place("gridnet_parts:IP5306", "U", "IP5306", 70, 90, ref="U2")
     sch.net(boost, "6", "VBATT")  # BAT pin -- pin 1 (VIN) unused, see README.md
     sch.power_pin(boost, "9", "GND")  # exposed PowerPAD -- the part's only ground, see README.md
     sch.power_pin(boost, "8", "+5V")
@@ -90,7 +92,7 @@ def build() -> Schematic:
     # (pin 7) to BAT (pin 6), shared between the buck charger and the boost
     # discharger. Without it the boost path (BAT -> VOUT) cannot function --
     # see README.md.
-    boost_l = sch.place("Device:L", "L", "1uH", 55, 100, footprint_override="Inductor_SMD:L_6.3x6.3_H3")
+    boost_l = sch.place("Device:L", "L", "1uH", 55, 100, footprint_override="Inductor_SMD:L_6.3x6.3_H3", ref="L1")
     sch.net(boost, "7", "IP5306_SW")
     sch.net(boost_l, "1", "IP5306_SW")
     sch.net(boost_l, "2", "VBATT")
@@ -98,8 +100,8 @@ def build() -> Schematic:
     # damping switching ringing -- small-signal only, not in the main
     # current path, so a standard 0603/0603 pair is fine here even though
     # the inductor itself carries boost-converter-level current.
-    snub_r = sch.place("Device:R", "R", "0.5R", 45, 95, footprint_override="Resistor_SMD:R_0603_1608Metric")
-    snub_c = sch.place("Device:C", "C", "22uF", 45, 105, footprint_override="Capacitor_SMD:C_0805_2012Metric")
+    snub_r = sch.place("Device:R", "R", "0.5R", 45, 95, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R14")
+    snub_c = sch.place("Device:C", "C", "22uF", 45, 105, footprint_override="Capacitor_SMD:C_0805_2012Metric", ref="C4")
     sch.net(snub_r, "1", "IP5306_SW")
     sch.net(snub_r, "2", "SNUBBER_MID")
     sch.net(snub_c, "1", "SNUBBER_MID")
@@ -107,27 +109,27 @@ def build() -> Schematic:
     # VOUT decoupling at the IC -- the datasheet figure uses a 4x22uF bank;
     # simplified to one here (see README.md), same simplification style as
     # the mono audio path elsewhere in this design.
-    vout_c = sch.place("Device:C", "C", "22uF", 80, 105, footprint_override="Capacitor_SMD:C_0805_2012Metric")
+    vout_c = sch.place("Device:C", "C", "22uF", 80, 105, footprint_override="Capacitor_SMD:C_0805_2012Metric", ref="C5")
     sch.power_pin(vout_c, "1", "+5V")
     sch.power_pin(vout_c, "2", "GND")
-    key_sw = sch.place("Switch:SW_Push", "SW", "PWR_KEY", 90, 90, footprint_override="Button_Switch_THT:SW_PUSH_6mm_H4.3mm")
+    key_sw = sch.place("Switch:SW_Push", "SW", "PWR_KEY", 90, 90, footprint_override="Button_Switch_THT:SW_PUSH_6mm_H4.3mm", ref="SW1")
     sch.net(boost, "5", "PWR_KEY")
     sch.net(key_sw, "1", "PWR_KEY")
     sch.power_pin(key_sw, "2", "GND")
-    batt_led1 = sch.place("Device:LED", "D", "LED (amber)", 95, 100, footprint_override="LED_SMD:LED_0603_1608Metric")
+    batt_led1 = sch.place("Device:LED", "D", "LED (amber)", 95, 100, footprint_override="LED_SMD:LED_0603_1608Metric", ref="D2")
     sch.net(boost, "2", "BATT_LED1")
     sch.net(batt_led1, "2", "BATT_LED1")
-    batt_led1_r = sch.place("Device:R", "R", "1k", 95, 110, footprint_override="Resistor_SMD:R_0603_1608Metric")
+    batt_led1_r = sch.place("Device:R", "R", "1k", 95, 110, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R5")
     sch.net(batt_led1, "1", "BATT_LED1_R")
     sch.net(batt_led1_r, "2", "BATT_LED1_R")
     sch.power_pin(batt_led1_r, "1", "+5V")
 
-    ldo_mcu = sch.place("gridnet_parts:AMS1117-3.3", "U", "AMS1117-3.3", 120, 55)
+    ldo_mcu = sch.place("gridnet_parts:AMS1117-3.3", "U", "AMS1117-3.3", 120, 55, ref="U3")
     sch.power_pin(ldo_mcu, "3", "+5V")
     sch.power_pin(ldo_mcu, "1", "GND")
     sch.net(ldo_mcu, "2", "+3V3_MCU")
 
-    ldo_rf = sch.place("gridnet_parts:AMS1117-3.3", "U", "AMS1117-3.3", 120, 90)
+    ldo_rf = sch.place("gridnet_parts:AMS1117-3.3", "U", "AMS1117-3.3", 120, 90, ref="U4")
     sch.power_pin(ldo_rf, "3", "+5V")
     sch.power_pin(ldo_rf, "1", "GND")
     sch.net(ldo_rf, "2", "+3V3_RF")
@@ -136,7 +138,7 @@ def build() -> Schematic:
     # MCU: crystal, reset, boot straps, SWD header
     # ------------------------------------------------------------------ #
 
-    mcu = sch.place("gridnet_parts:GD32VF103CCT6", "U", "GD32VF103CCT6", 190, 90)
+    mcu = sch.place("gridnet_parts:GD32VF103CCT6", "U", "GD32VF103CCT6", 190, 90, ref="U5")
     sch.net(mcu, "24", "+3V3_MCU")
     sch.net(mcu, "36", "+3V3_MCU")
     sch.net(mcu, "48", "+3V3_MCU")
@@ -147,38 +149,39 @@ def build() -> Schematic:
     sch.power_pin(mcu, "8", "GND")  # VSSA
     sch.power_pin(mcu, "1", "GND")  # VBAT -- no separate RTC coin cell on the MCU itself; tied to main rail
 
-    xtal = sch.place("Device:Crystal", "Y", "8MHz", 165, 115, footprint_override="Crystal:Crystal_SMD_HC49-SD")
+    xtal = sch.place("Device:Crystal", "Y", "8MHz", 165, 115, footprint_override="Crystal:Crystal_SMD_HC49-SD", ref="Y1")
     sch.net(mcu, "5", "OSC_IN")
     sch.net(mcu, "6", "OSC_OUT")
     sch.net(xtal, "1", "OSC_IN")
     sch.net(xtal, "2", "OSC_OUT")
-    xtal_c1 = sch.place("Device:C", "C", "20pF", 155, 115, footprint_override="Capacitor_SMD:C_0603_1608Metric")
-    xtal_c2 = sch.place("Device:C", "C", "20pF", 175, 115, footprint_override="Capacitor_SMD:C_0603_1608Metric")
+    xtal_c1 = sch.place("Device:C", "C", "20pF", 155, 115, footprint_override="Capacitor_SMD:C_0603_1608Metric", ref="C1")
+    xtal_c2 = sch.place("Device:C", "C", "20pF", 175, 115, footprint_override="Capacitor_SMD:C_0603_1608Metric", ref="C2")
     sch.net(xtal_c1, "1", "OSC_IN")
     sch.power_pin(xtal_c1, "2", "GND")
     sch.net(xtal_c2, "1", "OSC_OUT")
     sch.power_pin(xtal_c2, "2", "GND")
 
-    nrst_r = sch.place("Device:R", "R", "10k", 165, 60, footprint_override="Resistor_SMD:R_0603_1608Metric")
+    nrst_r = sch.place("Device:R", "R", "10k", 165, 60, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R6")
     sch.net(mcu, "7", "NRST")
     sch.net(nrst_r, "1", "NRST")
     sch.net(nrst_r, "2", "+3V3_MCU")
-    nrst_sw = sch.place("Switch:SW_Push", "SW", "RESET", 175, 60, footprint_override="Button_Switch_THT:SW_PUSH_6mm_H4.3mm")
+    nrst_sw = sch.place("Switch:SW_Push", "SW", "RESET", 175, 60, footprint_override="Button_Switch_THT:SW_PUSH_6mm_H4.3mm", ref="SW2")
     sch.net(nrst_sw, "1", "NRST")
     sch.power_pin(nrst_sw, "2", "GND")
 
-    boot0_r = sch.place("Device:R", "R", "10k", 222, 55, footprint_override="Resistor_SMD:R_0603_1608Metric")
+    boot0_r = sch.place("Device:R", "R", "10k", 222, 55, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R7")
     sch.net(mcu, "44", "BOOT0")
     sch.net(boot0_r, "1", "BOOT0")
     sch.power_pin(boot0_r, "2", "GND")
     boot0_jp = sch.place(
         "Connector_Generic:Conn_01x02", "J", "BOOT0_OVERRIDE_JUMPER", 237, 55,
         footprint_override="Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical",
+        ref="J3",
     )
     sch.net(boot0_jp, "1", "BOOT0")
     sch.net(boot0_jp, "2", "+3V3_MCU")
 
-    boot1_r = sch.place("Device:R", "R", "10k", 222, 80, footprint_override="Resistor_SMD:R_0603_1608Metric")
+    boot1_r = sch.place("Device:R", "R", "10k", 222, 80, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R8")
     sch.net(mcu, "20", "BOOT1")  # PB2/BOOT1
     sch.net(boot1_r, "1", "BOOT1")
     sch.power_pin(boot1_r, "2", "GND")
@@ -186,6 +189,7 @@ def build() -> Schematic:
     swd = sch.place(
         "Connector_Generic:Conn_01x04", "J", "SWD_DEBUG", 222, 105,
         footprint_override="Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical",
+        ref="J4",
     )
     sch.net(swd, "1", "+3V3_MCU")
     sch.net(swd, "2", "SWDIO")
@@ -205,7 +209,7 @@ def build() -> Schematic:
     sch.net(mcu, "11", "SRAM_CS")    # PA1
     sch.net(mcu, "12", "SD_CS")      # PA2
 
-    flash = sch.place("gridnet_parts:W25Q64JVSSIQ", "U", "W25Q64JVSSIQ", 260, 60)
+    flash = sch.place("gridnet_parts:W25Q64JVSSIQ", "U", "W25Q64JVSSIQ", 260, 60, ref="U6")
     sch.net(flash, "8", "+3V3_MCU")
     sch.power_pin(flash, "4", "GND", stub=7.62)
     sch.net(flash, "1", "FLASH_CS")
@@ -215,7 +219,7 @@ def build() -> Schematic:
     sch.net(flash, "3", "+3V3_MCU")  # ~WP -- tied inactive (not used)
     sch.net(flash, "7", "+3V3_MCU")  # ~HOLD -- tied inactive (not used)
 
-    sram = sch.place("gridnet_parts:23LC1024", "U", "23LC1024", 260, 90)
+    sram = sch.place("gridnet_parts:23LC1024", "U", "23LC1024", 260, 90, ref="U7")
     sch.net(sram, "8", "+3V3_MCU")
     sch.power_pin(sram, "4", "GND", stub=7.62)
     sch.net(sram, "1", "SRAM_CS")
@@ -228,6 +232,7 @@ def build() -> Schematic:
     sdcard = sch.place(
         "Connector:Micro_SD_Card", "J", "MICROSD", 260, 120,
         footprint_override="Connector_Card:microSD_HC_Molex_104031-0811",
+        ref="J5",
     )
     sch.net(sdcard, "4", "+3V3_MCU")
     sch.power_pin(sdcard, "6", "GND")
@@ -238,7 +243,7 @@ def build() -> Schematic:
 
     # Substituted for REV 0.4's DS3231SN -- same SCL/SDA/VBAT/32KHZ/INT-SQW
     # functionality, real verified KiCad library part; see README.md.
-    rtc = sch.place("gridnet_parts:DS3231M", "U", "DS3231M", 300, 60)
+    rtc = sch.place("gridnet_parts:DS3231M", "U", "DS3231M", 300, 60, ref="U8")
     sch.net(rtc, "2", "+3V3_MCU")
     for gnd_pin in ("5", "6", "7", "8", "9", "10", "11", "12", "13"):
         sch.power_pin(rtc, gnd_pin, "GND")
@@ -246,16 +251,17 @@ def build() -> Schematic:
     sch.net(mcu, "43", "I2C1_SDA")  # PB7
     sch.net(rtc, "16", "I2C1_SCL")
     sch.net(rtc, "15", "I2C1_SDA")
-    i2c_pu1 = sch.place("Device:R", "R", "4.7k", 300, 45, footprint_override="Resistor_SMD:R_0603_1608Metric")
+    i2c_pu1 = sch.place("Device:R", "R", "4.7k", 300, 45, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R9")
     sch.net(i2c_pu1, "1", "I2C1_SCL")
     sch.net(i2c_pu1, "2", "+3V3_MCU")
-    i2c_pu2 = sch.place("Device:R", "R", "4.7k", 310, 45, footprint_override="Resistor_SMD:R_0603_1608Metric")
+    i2c_pu2 = sch.place("Device:R", "R", "4.7k", 310, 45, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R10")
     sch.net(i2c_pu2, "1", "I2C1_SDA")
     sch.net(i2c_pu2, "2", "+3V3_MCU")
 
     rtc_batt = sch.place(
         "Connector_Generic:Conn_01x02", "J", "CR2032_HOLDER", 300, 90,
         footprint_override="Battery:BatteryHolder_MYOUNG_BS-07-A1BJ001_CR2032",
+        ref="J6",
     )
     sch.pwr_flag(rtc_batt, "1", "VBAT_RTC")  # externally-sourced net (the coin cell) -- see README.md
     sch.power_pin(rtc_batt, "2", "GND")
@@ -265,7 +271,7 @@ def build() -> Schematic:
     # Wireless: ESP32-C3-MINI-1U (USART1: PA9=TX, PA10=RX), U.FL -> SMA
     # ------------------------------------------------------------------ #
 
-    esp = sch.place("gridnet_parts:ESP32-C3-MINI-1U", "U", "ESP32-C3-MINI-1U", 350, 60)
+    esp = sch.place("gridnet_parts:ESP32-C3-MINI-1U", "U", "ESP32-C3-MINI-1U", 350, 60, ref="U9")
     sch.net(esp, "3", "+3V3_RF")
     # Every real GND pad (Table 3-1: 1, 2, 11, 14, 36-53), not just 1/2 --
     # see README.md's "Real ESP32-C3-MINI-1U footprint" for why this used to
@@ -274,11 +280,11 @@ def build() -> Schematic:
     for p in ("1", "2", "11", "14", "36", "37", "38", "39", "40", "41", "42",
               "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53"):
         sch.power_pin(esp, p, "GND")
-    en_r = sch.place("Device:R", "R", "10k", 335, 45, footprint_override="Resistor_SMD:R_0603_1608Metric")
+    en_r = sch.place("Device:R", "R", "10k", 335, 45, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R11")
     sch.net(esp, "8", "ESP_EN")
     sch.net(en_r, "1", "ESP_EN")
     sch.net(en_r, "2", "+3V3_RF")
-    boot_r = sch.place("Device:R", "R", "10k", 365, 45, footprint_override="Resistor_SMD:R_0603_1608Metric")
+    boot_r = sch.place("Device:R", "R", "10k", 365, 45, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R12")
     sch.net(esp, "23", "ESP_IO9")
     sch.net(boot_r, "1", "ESP_IO9")
     sch.net(boot_r, "2", "+3V3_RF")
@@ -295,6 +301,7 @@ def build() -> Schematic:
     ufl = sch.place(
         "Connector:Conn_Coaxial_Small", "J", "U.FL", 350, 90,
         footprint_override="Connector_Coaxial:U.FL_Molex_MCRF_73412-0110_Vertical",
+        ref="J7",
     )
     sch.net(esp, "ANT", "ANT_RF")
     sch.net(ufl, "1", "ANT_RF")
@@ -303,6 +310,7 @@ def build() -> Schematic:
     pigtail_sma = sch.place(
         "Connector:Conn_Coaxial", "J", "SMA_EDGE", 350, 105,
         footprint_override="Connector_Coaxial:SMA_Amphenol_132289_EdgeMount",
+        ref="J8",
     )
     sch.net(pigtail_sma, "1", "ANT_RF")
     sch.power_pin(pigtail_sma, "2", "GND")
@@ -322,6 +330,7 @@ def build() -> Schematic:
     disp_conn = sch.place(
         "Connector_Generic:Conn_01x08", "J", "RA8875_DISPLAY_MODULE", 415, 45,
         footprint_override="Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Vertical",
+        ref="J9",
     )
     sch.net(disp_conn, "1", "+3V3_MCU")
     sch.power_pin(disp_conn, "2", "GND")
@@ -337,6 +346,7 @@ def build() -> Schematic:
     kbd_conn = sch.place(
         "Connector_Generic:Conn_01x04", "J", "CH552G_KEYBOARD_MCU", 415, 75,
         footprint_override="Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical",
+        ref="J10",
     )
     sch.net(kbd_conn, "1", "+3V3_MCU")
     sch.power_pin(kbd_conn, "2", "GND")
@@ -345,19 +355,20 @@ def build() -> Schematic:
 
     sch.net(mcu, "41", "KBD_BACKLIGHT_PWM")  # PB5
     # Keyboard-backlight LED-array low-side switch
-    kbl_fet = sch.place("Transistor_FET:2N7002", "Q", "2N7002", 445, 90)
+    kbl_fet = sch.place("Transistor_FET:2N7002", "Q", "2N7002", 445, 90, ref="Q1")
     sch.net(kbl_fet, "1", "KBD_BACKLIGHT_PWM")  # gate
     sch.power_pin(kbl_fet, "2", "GND")  # source
     kbl_conn = sch.place(
         "Connector_Generic:Conn_01x02", "J", "KEYBOARD_BACKLIGHT_LEDS", 445, 110,
         footprint_override="Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical",
+        ref="J11",
     )
     sch.net(kbl_conn, "1", "+3V3_MCU")
     sch.net(kbl_conn, "2", "KBL_DRAIN")
     sch.net(kbl_fet, "3", "KBL_DRAIN")  # drain
 
     sch.net(mcu, "29", "AUDIO_SHDN")  # PA8
-    amp = sch.place("gridnet_parts:PAM8403D", "U", "PAM8403D", 410, 135)
+    amp = sch.place("gridnet_parts:PAM8403D", "U", "PAM8403D", 410, 135, ref="U10")
     sch.power_pin(amp, "6", "+5V")
     sch.power_pin(amp, "4", "+5V")
     sch.power_pin(amp, "11", "GND")
@@ -371,17 +382,18 @@ def build() -> Schematic:
     sch.net(amp, "10", "AUDIO_IN")  # INR
     sch.net(amp, "8", "AUDIO_IN")   # VREF
     # 1k + C below: PWM-to-analog RC filter for the mono audio source
-    audio_dac_r = sch.place("Device:R", "R", "1k", 385, 155, footprint_override="Resistor_SMD:R_0603_1608Metric")
+    audio_dac_r = sch.place("Device:R", "R", "1k", 385, 155, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R13")
     sch.net(mcu, "14", "AUDIO_PWM")  # PA4
     sch.net(audio_dac_r, "1", "AUDIO_PWM")
     sch.net(audio_dac_r, "2", "AUDIO_IN")
-    audio_dac_c = sch.place("Device:C", "C", "100nF", 400, 155, footprint_override="Capacitor_SMD:C_0603_1608Metric")
+    audio_dac_c = sch.place("Device:C", "C", "100nF", 400, 155, footprint_override="Capacitor_SMD:C_0603_1608Metric", ref="C3")
     sch.net(audio_dac_c, "1", "AUDIO_IN")
     sch.power_pin(audio_dac_c, "2", "GND")
 
     speaker_conn = sch.place(
         "Connector_Generic:Conn_01x02", "J", "SPEAKER_1W_8OHM", 445, 155,
         footprint_override="Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical",
+        ref="J12",
     )
     sch.net(amp, "1", "SPK_L+")
     sch.net(amp, "3", "SPK_L-")

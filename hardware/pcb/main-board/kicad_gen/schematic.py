@@ -44,7 +44,8 @@ class Schematic:
         self.power_symbols: List["Component"] = []
         self.no_connects: List[Tuple[float, float]] = []
         self._used_symbol_blocks: Dict[str, str] = {}  # lib_id -> block text
-        self._ref_counters: Dict[str, int] = {}
+        self._used_refs: set = set()  # explicit refdes, see place()
+        self._virtual_counts: Dict[str, int] = {}  # #PWR/#FLG symbols stay auto-numbered
         self._sheet_uuid = sexp.new_uuid()
 
     # ------------------------------------------------------------------ #
@@ -105,11 +106,31 @@ class Schematic:
         y: float,
         footprint_override: Optional[str] = None,
         extra_props: Optional[Dict[str, str]] = None,
+        ref: Optional[str] = None,
     ) -> "Component":
         block = self._get_block(lib_id)
-        n = self._ref_counters.get(ref_prefix, 0) + 1
-        self._ref_counters[ref_prefix] = n
-        ref = f"{ref_prefix}{n}"
+        # Reference designators are passed in explicitly by the caller, NOT
+        # derived from call order. They used to be auto-numbered here, which
+        # made every refdes depend on where in build_schematic.py a part was
+        # placed -- so inserting a part mid-file silently renumbered every
+        # later part of the same prefix. build_pcb.py's PLACEMENT dict is
+        # keyed by refdes, so that renumbering moved unrelated components to
+        # each other's board positions without any error (see README.md,
+        # "Reference-designator drift"). Explicit refs make the two files
+        # agree by declaration instead of by coincidence.
+        if ref_prefix.startswith("#"):
+            # Virtual symbols (#PWR power symbols, #FLG power flags) are not
+            # real components -- they never appear in the netlist's component
+            # list and so never reach PLACEMENT. Auto-number those.
+            self._virtual_counts[ref_prefix] = self._virtual_counts.get(ref_prefix, 0) + 1
+            ref = f"{ref_prefix}{self._virtual_counts[ref_prefix]}"
+        elif ref is None:
+            raise ValueError(f"place({lib_id!r}) needs an explicit ref= (e.g. ref='{ref_prefix}1')")
+        elif not ref.startswith(ref_prefix):
+            raise ValueError(f"ref {ref!r} does not start with its prefix {ref_prefix!r}")
+        if ref in self._used_refs:
+            raise ValueError(f"duplicate reference designator {ref!r}")
+        self._used_refs.add(ref)
         comp = Component(
             lib_id=lib_id,
             ref=ref,
