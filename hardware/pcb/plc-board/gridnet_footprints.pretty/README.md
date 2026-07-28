@@ -17,4 +17,6 @@ KiCad's own bundled libraries.
 Verified before use: 53 distinct pad numbers (identical layout to the
 Main Board's MINI-1U footprint, including the pin-49 3x3 thermal-pad
 array), matching Table 3-1 of the ESP32-C3-MINI-1/1U datasheet. This
-plain (non-U) variant has an on-module PCB antenna and no U.FL pad.
+plain (non-U) variant has an on-module PCB antenna; the -1U has an
+on-module W.FL/MHF III jack instead. Neither has an RF pad -- the pad
+count and layout are the same for both.

@@ -1537,11 +1537,11 @@
 		(in_bom yes)
 		(on_board yes)
 		(property "Reference" "U"
-			(at -16.51 33.02 0)
+			(at -16.51 30.48 0)
 			(effects (font (size 1.27 1.27)))
 		)
 		(property "Value" "ESP32-C3-MINI-1U"
-			(at -16.51 35.56 0)
+			(at -16.51 33.02 0)
 			(effects (font (size 1.27 1.27)))
 		)
 		(property "Footprint" "gridnet_footprints:ESP32-C3-MINI-1U"
@@ -1552,14 +1552,14 @@
 			(at 0 0 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
-		(property "Description" "Espressif Wi-Fi/BLE module, U.FL antenna variant -- pin functions AND pad numbers verified against the real Espressif ESP32-C3-MINI-1/1U datasheet (v2.2) Table 3-1; every GND pad (including the pin-49 thermal-pad array) and every real signal pad is now drawn -- only the 14 true NC pads (4,7,9,10,15,17,24,25,28,29,32-35) are omitted. Footprint is the real MINI-1U footprint (see comment above), not a placeholder. — CUSTOM SYMBOL, generic rectangle body"
+		(property "Description" "Espressif Wi-Fi/BLE module, external-antenna variant (the antenna jack is on the module; the module exposes no RF pad) -- pin functions AND pad numbers verified against the real Espressif ESP32-C3-MINI-1/1U datasheet (v2.2) Table 3-1; every GND pad (including the pin-49 thermal-pad array) and every real signal pad is now drawn -- only the 14 true NC pads (4,7,9,10,15,17,24,25,28,29,32-35) are omitted. Footprint is the real MINI-1U footprint (see comment above), not a placeholder. — CUSTOM SYMBOL, generic rectangle body"
 			(at 0 0 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(symbol "ESP32-C3-MINI-1U_0_1"
 		(rectangle
-			(start -16.51 30.48)
-			(end 16.51 -30.48)
+			(start -16.51 27.94)
+			(end 16.51 -27.94)
 			(stroke (width 0.254) (type default))
 			(fill (type background))
 		)
@@ -1756,7 +1756,7 @@
 				)
 			)
 			(pin bidirectional line
-				(at 19.05 25.4 180)
+				(at 19.05 24.13 180)
 				(length 2.54)
 				(name "IO4"
 					(effects (font (size 1.27 1.27)))
@@ -1766,7 +1766,7 @@
 				)
 			)
 			(pin bidirectional line
-				(at 19.05 22.86 180)
+				(at 19.05 21.59 180)
 				(length 2.54)
 				(name "IO5"
 					(effects (font (size 1.27 1.27)))
@@ -1776,7 +1776,7 @@
 				)
 			)
 			(pin bidirectional line
-				(at 19.05 20.32 180)
+				(at 19.05 19.049999999999997 180)
 				(length 2.54)
 				(name "IO6"
 					(effects (font (size 1.27 1.27)))
@@ -1786,7 +1786,7 @@
 				)
 			)
 			(pin bidirectional line
-				(at 19.05 17.779999999999998 180)
+				(at 19.05 16.509999999999998 180)
 				(length 2.54)
 				(name "IO7"
 					(effects (font (size 1.27 1.27)))
@@ -1796,7 +1796,7 @@
 				)
 			)
 			(pin bidirectional line
-				(at 19.05 15.239999999999998 180)
+				(at 19.05 13.969999999999999 180)
 				(length 2.54)
 				(name "IO8"
 					(effects (font (size 1.27 1.27)))
@@ -1806,7 +1806,7 @@
 				)
 			)
 			(pin bidirectional line
-				(at 19.05 12.7 180)
+				(at 19.05 11.43 180)
 				(length 2.54)
 				(name "IO9/BOOT"
 					(effects (font (size 1.27 1.27)))
@@ -1816,7 +1816,7 @@
 				)
 			)
 			(pin bidirectional line
-				(at 19.05 10.159999999999998 180)
+				(at 19.05 8.889999999999999 180)
 				(length 2.54)
 				(name "IO18/USB_D-"
 					(effects (font (size 1.27 1.27)))
@@ -1826,7 +1826,7 @@
 				)
 			)
 			(pin bidirectional line
-				(at 19.05 7.619999999999997 180)
+				(at 19.05 6.349999999999998 180)
 				(length 2.54)
 				(name "IO19/USB_D+"
 					(effects (font (size 1.27 1.27)))
@@ -1836,7 +1836,7 @@
 				)
 			)
 			(pin input line
-				(at 19.05 5.079999999999998 180)
+				(at 19.05 3.8099999999999987 180)
 				(length 2.54)
 				(name "U0RXD"
 					(effects (font (size 1.27 1.27)))
@@ -1846,7 +1846,7 @@
 				)
 			)
 			(pin output line
-				(at 19.05 2.539999999999999 180)
+				(at 19.05 1.2699999999999996 180)
 				(length 2.54)
 				(name "U0TXD"
 					(effects (font (size 1.27 1.27)))
@@ -1855,18 +1855,8 @@
 					(effects (font (size 1.27 1.27)))
 				)
 			)
-			(pin passive line
-				(at 19.05 0.0 180)
-				(length 2.54)
-				(name "ANT"
-					(effects (font (size 1.27 1.27)))
-				)
-				(number "ANT"
-					(effects (font (size 1.27 1.27)))
-				)
-			)
 			(pin power_in line
-				(at 19.05 -2.5400000000000027 180)
+				(at 19.05 -1.2699999999999996 180)
 				(length 2.54)
 				(name "GND"
 					(effects (font (size 1.27 1.27)))
@@ -1876,7 +1866,7 @@
 				)
 			)
 			(pin power_in line
-				(at 19.05 -5.080000000000002 180)
+				(at 19.05 -3.8100000000000023 180)
 				(length 2.54)
 				(name "GND"
 					(effects (font (size 1.27 1.27)))
@@ -1886,7 +1876,7 @@
 				)
 			)
 			(pin power_in line
-				(at 19.05 -7.6200000000000045 180)
+				(at 19.05 -6.350000000000001 180)
 				(length 2.54)
 				(name "GND"
 					(effects (font (size 1.27 1.27)))
@@ -1896,7 +1886,7 @@
 				)
 			)
 			(pin power_in line
-				(at 19.05 -10.160000000000004 180)
+				(at 19.05 -8.890000000000004 180)
 				(length 2.54)
 				(name "GND"
 					(effects (font (size 1.27 1.27)))
@@ -1906,7 +1896,7 @@
 				)
 			)
 			(pin power_in line
-				(at 19.05 -12.700000000000003 180)
+				(at 19.05 -11.430000000000003 180)
 				(length 2.54)
 				(name "GND"
 					(effects (font (size 1.27 1.27)))
@@ -1916,7 +1906,7 @@
 				)
 			)
 			(pin power_in line
-				(at 19.05 -15.240000000000002 180)
+				(at 19.05 -13.970000000000002 180)
 				(length 2.54)
 				(name "GND"
 					(effects (font (size 1.27 1.27)))
@@ -1926,7 +1916,7 @@
 				)
 			)
 			(pin power_in line
-				(at 19.05 -17.78 180)
+				(at 19.05 -16.51 180)
 				(length 2.54)
 				(name "GND"
 					(effects (font (size 1.27 1.27)))
@@ -1936,7 +1926,7 @@
 				)
 			)
 			(pin power_in line
-				(at 19.05 -20.32 180)
+				(at 19.05 -19.05 180)
 				(length 2.54)
 				(name "GND"
 					(effects (font (size 1.27 1.27)))
@@ -1946,7 +1936,7 @@
 				)
 			)
 			(pin power_in line
-				(at 19.05 -22.86 180)
+				(at 19.05 -21.59 180)
 				(length 2.54)
 				(name "GND"
 					(effects (font (size 1.27 1.27)))
@@ -1956,7 +1946,7 @@
 				)
 			)
 			(pin power_in line
-				(at 19.05 -25.4 180)
+				(at 19.05 -24.13 180)
 				(length 2.54)
 				(name "GND"
 					(effects (font (size 1.27 1.27)))

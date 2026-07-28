@@ -56,7 +56,7 @@ The user-facing device. ThinkPad-inspired clamshell form factor.
 | **Storage** | 8MB SPI Flash (LittleFS) + microSD slot |
 | **Battery** | 2× 18650, 3350mAh-class genuine cells (~6700mAh total), ~17h active use (screen on) / ~17.5 days standby (screen off, mesh-listen only) — see [`docs/firmware-arch.md`](docs/firmware-arch.md) Power Budget for the full breakdown |
 | **Charging** | USB-C, ~4 hours |
-| **Antenna** | SMA connector, external (via U.FL pigtail from the Wi-Fi module) |
+| **Antenna** | External, ≤2.33 dBi, on a bulkhead SMA in the case wall — reached by an MHF III / W.FL pigtail from the module's own antenna jack, not by board copper (the module has no RF pad; see [`hardware/pcb/main-board`](hardware/pcb/main-board)) |
 | **Dimensions** | 260 × 160 × 28mm, ~680g |
 | **OS** | Zephyr RTOS, custom RISC-V BSP |
 
@@ -218,13 +218,13 @@ GRIDNET puts a low-voltage signal on the mains through a transformer. It does no
 | Communication protocol stack | ✅ Complete |
 | PLC Adapter power architecture ([`docs/plc-adapter-power.md`](docs/plc-adapter-power.md)) | ✅ Complete — adapter runs off the Terminal's battery during an outage; the 24V inverter and its master-election protocol were removed (never able to run, and outside EN 50065-1) |
 | Protection circuit topology (TVS + MOV + relay) | ✅ Complete — topology and parts selected ([`hardware/bom.md`](hardware/bom.md)); not yet a drawn schematic |
-| Main Board schematic + PCB layout ([`hardware/pcb/main-board`](hardware/pcb/main-board)) | ✅ Complete — custom parts datasheet-verified, PCB placed, routed, ground-poured on both layers, DRC clean (0 violations, 0 unconnected). REV 0.7 was a pre-fab design review that caught a refdes-drift bug placing parts in each other's positions (crystal load caps 51mm from the crystal), a boost-converter switching loop spread across 63mm, and every trace at 0.2mm including a 2.4A path — see that directory's README |
+| Main Board schematic + PCB layout ([`hardware/pcb/main-board`](hardware/pcb/main-board)) | ✅ Complete — custom parts datasheet-verified, PCB placed, routed, ground-poured on both layers, DRC clean (0 violations, 0 unconnected). REV 0.7 was a pre-fab design review that caught a refdes-drift bug placing parts in each other's positions (crystal load caps 51mm from the crystal), a boost-converter switching loop spread across 63mm, and every trace at 0.2mm including a 2.4A path. REV 0.8 found the antenna path was fiction — a phantom U.FL duplicating the module's own jack, a trace nothing could drive, and an invented `ANT` symbol pin — and that the "grid of stitching vias" was nine vias in one column, because `BOX2I.Inflate()` mutates in place (now 167, worst-case return path 55mm → 16.8mm) — see that directory's README |
 | PLC/Power Board (BOM's Board 1, the PLC Adapter's PCB — see [`hardware/pcb/plc-board`](hardware/pcb/plc-board)) | 🔄 REV 0.2, ERC-clean. Power architecture now complete: Terminal USB-C inlet, Schottky ORing, supercapacitor hold-up, 5V→12V boost feeding the ST7580's `VCC`, and its hardware transmit-current limit. One gap left — the PA output network and coupling transformer, which need ST's AN4068 reference circuit rather than a guess. No PCB layout yet. |
 | Case design (CAD) | 📋 Planned — only target external dimensions exist (see Hardware Overview); no CAD model |
 | Software architecture (Zephyr + Forth VM) | ✅ Complete |
 | Electrical safety analysis | ✅ Complete |
 | Protocol & Forth VM reference prototypes ([`tools/`](tools/), Python, pre-hardware validation) | ✅ Complete |
-| **PCB fabrication / Hardware prototype** | 🔄 Next step — Main Board has been through a design-review pass and is DRC-clean; what still stands between it and fab is RF layout for the 2.4GHz antenna path and a stackup/impedance decision (see [`hardware/pcb/main-board`](hardware/pcb/main-board) "What's not done yet"). Board 1 needs its PA output network and coupling transformer (blocked on ST's AN4068) before its own layout can start meaningfully |
+| **PCB fabrication / Hardware prototype** | 🔄 Next step — Main Board has been through two design-review passes and is DRC-clean. RF layout is no longer on its list: there is no RF net on the board (the antenna is a cable assembly from the module's own jack). What is left before fab is a stackup decision, a return-path review of the SPI/I2C buses, and a human eye on the autorouted copper (see [`hardware/pcb/main-board`](hardware/pcb/main-board) "What's not done yet"). Board 1 needs its PA output network and coupling transformer (blocked on ST's AN4068) before its own layout can start meaningfully |
 | Embedded firmware (Zephyr, on real hardware) | 📋 Planned — starts after PCB prototype |
 | Field testing | 📋 Planned |
 

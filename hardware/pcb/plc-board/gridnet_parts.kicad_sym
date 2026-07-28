@@ -548,7 +548,7 @@
 			(at 0 0 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
-		(property "Description" "Espressif Wi-Fi/BLE module, on-module PCB antenna variant (no external antenna needed) -- pin functions AND pad numbers verified against the real Espressif ESP32-C3-MINI-1/1U datasheet (v2.2) Table 3-1, same pin list as the Main Board's MINI-1U symbol minus the U.FL-only ANT pad — CUSTOM SYMBOL, generic rectangle body"
+		(property "Description" "Espressif Wi-Fi/BLE module, on-module PCB antenna variant (no external antenna needed) -- pin functions AND pad numbers verified against the real Espressif ESP32-C3-MINI-1/1U datasheet (v2.2) Table 3-1, same pin list as the Main Board's MINI-1U symbol -- neither module brings its radio out to a pad — CUSTOM SYMBOL, generic rectangle body"
 			(at 0 0 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
