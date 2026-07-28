@@ -3,7 +3,7 @@ Overview
 GRIDNET uses a custom lightweight protocol designed for low-bandwidth, high-latency powerline communication. Every device is both a node and a repeater.
 
 Physical Layer
-ParameterValueTechnologyPLC (Powerline Communication)ChipST7580 (STMicroelectronics)StandardCENELEC EN50065, A-bandFrequency9–148 kHzModulationOFDM / FSKTypical data rate2.4–9.6 kbpsFallbackESP32-C3 Wi-Fi 2.4GHz mesh
+ParameterValueTechnologyPLC (Powerline Communication)ChipST7580 (STMicroelectronics)StandardCENELEC EN50065 (band under review — A-band is utility-only, see docs/electrical-safety.md)Frequency9–148 kHzModulationOFDM / FSKTypical data rate2.4–9.6 kbpsFallbackESP32-C3 Wi-Fi 2.4GHz mesh
 
 Packet Format
 [AA AA AA] [55] [LEN 2B] [SRC 4B] [DST 4B] [SEQ 2B] [TYPE 1B] [PAYLOAD] [CRC16 2B]
@@ -19,7 +19,7 @@ Hierarchical 4-byte address — no central registry required:
 Addresses are self-assigned. Collision detection via CSMA/CA.
 
 Message Types
-TypeCodeDescriptionMSG0x01Standard messageACK0x02Delivery acknowledgementBROADCAST0x03Emergency broadcast, all nodesROUTE0x04Routing table updateMASTER_ALIVE0x05Inverter master heartbeatAPP_DATA0x10Forth application dataGAME_STATE0x11Game state packetGAME_ACTION0x12Game action packet
+TypeCodeDescriptionMSG0x01Standard messageACK0x02Delivery acknowledgementBROADCAST0x03Emergency broadcast, all nodesROUTE0x04Routing table updateAPP_DATA0x10Forth application dataGAME_STATE0x11Game state packetGAME_ACTION0x12Game action packet
 
 Mesh Routing
 
@@ -47,42 +47,27 @@ ctypedef struct {
 
 Every device always includes itself at hop_count 0. On receipt, a device compares each entry's (hop_count + 1) against its own table and keeps the lower value, recording the sender as next_hop. A device discards any incoming entry whose address is its own — the minimal loop-prevention this simplified distance-vector scheme relies on (no split-horizon/poison-reverse).
 
-Hop counts are capped at 15 (RIP-style "infinity"); entries at or above the cap are dropped rather than propagated further, bounding runaway counts across a brief segment partition/reconnect. An entry not refreshed within 3 advertisement intervals (180s) is considered stale and dropped from that device's own next advertisement — the same "3 missed heartbeats" convention docs/inverter-master.md uses for MASTER_TIMEOUT.
+Hop counts are capped at 15 (RIP-style "infinity"); entries at or above the cap are dropped rather than propagated further, bounding runaway counts across a brief segment partition/reconnect. An entry not refreshed within 3 advertisement intervals (180s) is considered stale and dropped from that device's own next advertisement — the usual "3 missed heartbeats" convention.
 
-Advertisement interval: 60 seconds. Much longer than MASTER_ALIVE's 10s, deliberately: a full table (up to 255 bytes of payload) costs meaningfully more airtime than a 9-byte heartbeat on a 2.4–9.6kbps link — at 2.4kbps, one full-size ROUTE broadcast occupies the channel for roughly 900ms, so every device doing this too often would eat directly into the bandwidth available for MSG traffic. Routing information is also far less time-critical than the inverter master heartbeat, which gates a physical 24V injection decision.
+Advertisement interval: 60 seconds. Deliberately long: a full table (up to 255 bytes of payload) costs meaningfully more airtime than a 9-byte heartbeat on a 2.4–9.6kbps link — at 2.4kbps, one full-size ROUTE broadcast occupies the channel for roughly 900ms, so every device doing this too often would eat directly into the bandwidth available for MSG traffic. Routing information is not time-critical: a stale hop count costs an extra relay, not a lost packet.
 
 Automatic Channel Selection
 Priority order, evaluated continuously:
-PriorityChannelConditionCurrent draw1Powerline (PLC)Grid power on, line intact~58mA2Inverter + PLCGrid off, line physically intact~260mA3Wi-Fi MeshLine damaged or PLC failed~138mA
-Transition time between channels: < 20ms (relay-controlled).
+PriorityChannelCondition1Powerline (PLC)Line intact — works whether or not the grid is energised2Wi-Fi MeshLine damaged or PLC failed
+During a grid outage the adapter keeps using PLC; what changes is where it gets its power, not which channel it uses. See docs/plc-adapter-power.md.
 
-Inverter Master Protocol (REV 0.5)
-When grid power fails, only one device per segment injects 24V AC onto the wire to prevent voltage conflicts.
-Grid power lost, witnessed directly (device was GRID_ON a moment ago)
-  → Wait 2 seconds + jitter (0–500ms)
-  → Listen for 24V AC on wire
-      YES → Another device is master → enter passive mode
-      NO  → Become master → start injecting 24V AC
-
-Device powering on / rejoining while the grid is already off
-  → Wait a full MASTER_ALIVE heartbeat cycle (~12 seconds + jitter) instead
-      — it can't assume no master exists just because it hasn't heard one yet
-
-Master behavior:
-  → Broadcast MASTER_ALIVE packet every 10 seconds
-  → If no MASTER_ALIVE received for 30 seconds:
-      → Lowest-address active device becomes new master
-Why only one master?
-Multiple devices injecting simultaneously cause voltage conflicts and signal corruption. The master selection protocol ensures exactly one inverter is active per segment at any time.
-Why the jitter, and two different listen delays? See docs/inverter-master.md's "Design Notes — REV History": REV 0.4's flat, unjittered 2s delay made segment-wide split-brain the common outcome rather than a rare fallback, and using that same short delay for a device joining an already-running segment gave it only ~20% odds of hearing the existing master before wrongly claiming mastership itself.
+Operation During a Grid Outage
+The wire remains a conductor whether or not the grid energises it, so PLC signalling continues to work. What stops is the adapter's own power supply, which runs from mains. During an outage each adapter is powered by its Terminal's battery over a USB-C cable the user connects; a supercapacitor holds the adapter up long enough to tell the Terminal that mains has gone.
+Nothing is injected onto the wire and no arbitration between adapters is needed — every node transmits under CSMA/CA exactly as it does when the grid is up.
+Earlier revisions specified a 24V "inverter mode" and an inverter master election protocol here. Both were removed: the adapter had no power source during an outage and so could never have run an inverter, and a 24V injection sits 5-24x outside EN 50065-1's signal limits. See docs/plc-adapter-power.md for the analysis and docs/electrical-safety.md REV 0.6 for the compliance correction.
 
 Electrical Safety
 
-Injected voltage: 24V AC (safe per IEC 60479, below 50V AC threshold)
-Injected current: max 100mA (household breakers trip at 16A)
-Frequency: 9–148kHz — consumer electronics naturally filter this band
-Standard compliance: CENELEC EN50065 A-band
-Galvanic isolation: ST7580 and inverter always connect through transformer — no direct line connection
+Signal level: bounded by EN 50065-1 — 5 Vrms at 9 kHz falling to 1 Vrms at 95 kHz. The ST7580's PA delivers 14 V p-p (4.95 Vrms); the adapter adds a hardware current limit as a backstop.
+Nothing is injected onto the wire — GRIDNET signals, it does not energise.
+Frequency: consumer electronics naturally filter the CENELEC band
+Band allocation: A-band (9–95 kHz) is for electricity suppliers; general equipment belongs in 95–148.5 kHz. This document still says A-band above and needs updating — the largest open compliance item in the project.
+Galvanic isolation: the ST7580 reaches the line only through the coupling transformer, and the Terminal's USB-C cable sits on the isolated secondary
 
 
 Forth Application Protocol

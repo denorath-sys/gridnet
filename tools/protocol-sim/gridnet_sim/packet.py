@@ -29,8 +29,6 @@ class MessageType(IntEnum):
     ACK = 0x02
     BROADCAST = 0x03
     ROUTE = 0x04
-    MASTER_ALIVE = 0x05
-    MASTER_RESIGN = 0x06
     APP_DATA = 0x10
     GAME_STATE = 0x11
     GAME_ACTION = 0x12

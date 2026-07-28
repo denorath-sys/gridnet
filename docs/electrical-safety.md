@@ -1,109 +1,188 @@
-GRIDNET — Electrical Safety Analysis
+GRIDNET — Electrical Safety and Regulatory Analysis
+REV 0.6
+
 Overview
-GRIDNET injects 24V AC onto the power line when grid power fails. This document analyzes the safety of this approach for household equipment, other devices on the same network, and humans.
-Summary: The 24V AC injection is safe for all connected equipment and humans, and is compliant with CENELEC EN50065.
+--------
 
-Why 24V AC Injection Is Safe for Household Equipment
-1. Voltage Difference
-ParameterGridGRIDNET InverterVoltage230V AC24V ACFrequency50 Hz9–148 kHz (PLC band)CurrentUp to 16A (breaker limit)Max 100mA
-Household appliances are designed for 230V / 50Hz. The 24V AC signal at kilohertz frequencies is completely irrelevant to their power circuits.
-2. Frequency Filtering
-PLC signals operate at 9–148 kHz — between 180 and 3000 times the grid frequency. Consumer electronics power supplies, transformers, and filter capacitors are designed for 50Hz and naturally attenuate signals at kilohertz frequencies. The PLC signal is invisible to household devices.
-This is the same principle used by HomePlug, G.hn, and other powerline networking technologies deployed in millions of homes for over two decades without reported equipment damage.
-3. Current Limitation
-GRIDNET injects a maximum of 100mA onto the wire. For reference:
+GRIDNET couples a low-voltage signal onto household mains wiring in the
+CENELEC signalling band, through a transformer, to carry data between
+adapters. This document covers what that means for connected equipment,
+for people, and for regulatory compliance.
 
-The smallest USB phone charger draws ~500mA
-A household circuit breaker trips at 16A (160× more than GRIDNET's injection)
-The injected current is too small to affect any connected load
+**REV 0.6 is a correction.** Every earlier revision of this document was
+written around a 24V AC "inverter mode" in which one adapter energised the
+wire during a grid outage. That feature has been removed — see
+docs/plc-adapter-power.md for the full reasoning. Two things were wrong
+with it:
 
+1. **It could never have run.** The PLC Adapter's only supply was the
+   HLK-5M05, which needs 90–264V AC. When the grid fails the adapter loses
+   power, so it could not have driven an inverter, and the 24V it was
+   meant to inject could not have powered a neighbouring adapter either.
+2. **It was not compliant.** This document previously stated that
+   "GRIDNET's 24V AC, 100mA injection is within these limits", citing
+   EN 50065-1. That was false by a factor of 5 to 24 — see "Regulatory
+   compliance" below.
 
-Why the Injection Is Safe for Humans
-Per IEC 60479 (Effects of current on human beings and livestock):
+What replaces it: the adapter is powered from the Terminal's battery over
+a detachable cable during an outage, and the signal is driven by the
+ST7580's own integrated power amplifier at a level the standard permits.
 
-Voltages below 50V AC are classified as SELV (Safety Extra-Low Voltage)
-Under normal dry conditions, voltages below 50V AC do not cause ventricular fibrillation
-GRIDNET injects 24V AC — well below the 50V threshold
+Regulatory compliance
+---------------------
 
-Additionally, the signal is at high frequency (9–148 kHz). At these frequencies, the body's impedance is higher than at 50Hz, further reducing any physiological effect.
+### EN 50065-1 signal levels
 
-Standard Compliance
-CENELEC EN50065
-GRIDNET operates in the A-band of CENELEC EN50065:
-BandFrequencyUsersA9–95 kHzEnergy companies, smart meters, GRIDNETB95–125 kHzHome automationC125–140 kHzHome automation (CSMA)D140–148 kHzAlarm systems
-The A-band is specifically defined for signaling on public electricity networks. Devices operating in this band are legally permitted to inject signals onto the power line in Europe, provided they meet the signal level limits defined in the standard.
-GRIDNET's 24V AC, 100mA injection is within these limits.
-IEC 60479
-Classifies 24V AC as non-hazardous under normal dry conditions. Full compliance with SELV (Safety Extra-Low Voltage) definition.
+EN 50065-1 governs signalling on low-voltage electrical installations
+between 3 kHz and 148.5 kHz. For narrow-band signals in the A-band, the
+output level **shall not exceed 134 dB(µV) at 9 kHz, decreasing linearly
+with the logarithm of frequency to 120 dB(µV) at 95 kHz** — that is
+5 Vrms falling to 1 Vrms.
 
-Inverter Master Protocol — Preventing Voltage Conflicts (REV 0.5)
-If multiple GRIDNET devices on the same segment all inject simultaneously, the signals would interfere with each other. The inverter master protocol prevents this:
-Grid power fails
-  → Devices that witnessed the failure directly wait 2 seconds + jitter (0–500ms) and listen
-  → Devices powering on or rejoining afterward wait a full ~12-second heartbeat cycle instead — they can't assume no master exists just because they haven't heard one yet
-  → Is 24V AC present on the wire?
-      YES → Another device is already injecting → stay passive
-      NO  → Become master → start injecting
+GRIDNET's transmitter is the ST7580's integrated power amplifier, rated
+at 14 V p-p (datasheet DocID022644 Rev 2), which is 4.95 Vrms.
+STMicroelectronics sized the part to land on the limit; the design's job
+is to not exceed it, and the hardware current limit described in
+hardware/pcb/plc-board/README.md provides a backstop.
 
-Master device:
-  → Broadcasts MASTER_ALIVE packet every 10 seconds
-  → If no MASTER_ALIVE for 30 seconds:
-      → Lowest-address active device becomes new master
-Result: Exactly one device injects at any time, with split-brain detection (see docs/inverter-master.md's "Failure Scenarios") as a safety net for the rare case where two devices' jitter draws genuinely tie. Maximum current on the wire: 100mA. See that document's "Design Notes — REV History" for why the jitter and the two different listen delays were added.
+A 24V injection would have been 5 to 24 times over this limit depending
+on frequency. It is not in the design any more.
 
-Protection Circuit
-The adapter includes a three-layer protection circuit that handles:
-Layer 1 — Transient Suppression
+### Band allocation
 
-TVS Diode: P6KE250CA (bidirectional, 250V clamp)
-Absorbs fast voltage spikes (lightning, switching transients)
-Response time: < 1 picosecond
+| Band | Frequency | Permitted users |
+|---|---|---|
+| A | 9–95 kHz | **Electricity suppliers only** |
+| B | 95–125 kHz | General use, no access protocol required |
+| C | 125–140 kHz | General use, CSMA access protocol required |
+| D | 140–148.5 kHz | General use, alarm and security systems |
 
-Layer 2 — Sustained Overvoltage
+**GRIDNET is not an electricity supplier and cannot use the A-band.**
+Earlier revisions of this document listed the A-band's users as "Energy
+companies, smart meters, GRIDNET", which was wrong. General-purpose
+equipment is confined to 95–148.5 kHz.
 
-MOV: S20K275 (275V varistor)
-Handles sustained overvoltage conditions
-Self-resetting after overvoltage clears
+docs/protocol.md still specifies A-band operation throughout and needs
+revisiting. The ST7580 covers both ranges, so this is a configuration and
+documentation question rather than a hardware one — but it is unresolved,
+and it is the single largest open compliance item in the project.
 
-Layer 3 — Isolation and Switching
+### Other regions
 
-Relay: HK19F — galvanically isolates the inverter from the line when grid is present
-Optocoupler: PC817 — isolates control signals (5kV isolation rating)
-Voltage sensing circuit — detects grid presence and controls relay
+Outside Europe, regulations differ — FCC Part 15 in the US allocates
+different bands and limits. Check local EMC regulations before deploying.
 
-Transition Timing
-Grid returns after inverter mode:
-  1. V-Sense detects 230V AC present
-  2. Inverter stops immediately (< 1ms)
-  3. Relay waits 20ms (zero-crossing alignment)
-  4. Relay closes, reconnects to grid
-  5. Normal PLC mode resumes
-This prevents any voltage spike during the transition back to grid power.
+Why the signal is safe for household equipment
+-----------------------------------------------
 
-Galvanic Isolation
-This is mandatory and non-negotiable in the design.
-The ST7580 PLC chip and the inverter output always connect to the power line through a transformer. There is no direct electrical connection between the low-voltage digital circuits and the 230V power line.
-This means:
+PLC signalling operates at 95–148.5 kHz, between 1900 and 3000 times the
+50 Hz grid frequency. Consumer electronics power supplies, transformers
+and filter capacitors are designed for 50 Hz and naturally attenuate
+signals at these frequencies. The signal is effectively invisible to
+their power circuits.
 
-The user can never receive a mains voltage shock through the terminal
-A fault in the digital circuits cannot energize the mains line
-The design complies with basic insulation requirements of IEC 60950/62368
+This is the same principle used by HomePlug, G.hn and smart-metering
+systems deployed in millions of homes for over two decades. GRIDNET's
+signal level is comparable to theirs, which is the point of staying inside
+EN 50065-1 rather than above it.
 
+| Technology | Frequency | Signal level | In use since |
+|---|---|---|---|
+| HomePlug AV | 1.8–30 MHz | ~1V | 2005 (HomePlug 1.0 from 2001) |
+| G.hn | 2–100 MHz | ~1V | 2009 |
+| Smart meter (DLMS) | 9–95 kHz | ~1V | 1990s |
+| GRIDNET | 95–148.5 kHz | ≤5 Vrms, EN 50065-1 limited | — |
 
-Comparison With Existing Powerline Technologies
-TechnologyFrequencyVoltageCurrentIn Use SinceHomePlug AV1.8–30 MHz~1V (signal)< 1mA2005 (HomePlug AV; the original 14Mbps HomePlug 1.0 was 2001)G.hn2–100 MHz~1V (signal)< 1mA2009Smart meter (DLMS)9–95 kHz~1V (signal)< 1mA1990sGRIDNET (inverter mode)9–148 kHz24V100mA—
-GRIDNET's inverter mode injects significantly more power than typical PLC systems — this is intentional, as it must be able to drive signal across building transformers and over longer distances. However, it is still well within safe limits.
+Galvanic isolation
+------------------
 
-Frequently Asked Questions
-Q: Will GRIDNET damage my neighbor's television / refrigerator / computer?
-No. The 24V / 100mA signal at 9–148kHz is filtered out by every household appliance's power supply. The signal is invisible to their power circuits.
-Q: Will GRIDNET interfere with my neighbor's HomePlug adapter?
-Potentially, if both operate on the same frequency band. GRIDNET uses CSMA/CA (listen-before-transmit) to minimize interference. In a neighborhood scenario, GRIDNET devices cooperate and form a single network rather than interfering with each other.
-Q: Is it legal to inject signals onto the power line?
-In Europe: Yes, within the CENELEC EN50065 A-band limits. GRIDNET is designed to comply with these limits.
-In other regions: regulations vary. Check local EMC regulations before deploying.
-Q: What if two GRIDNET devices inject at the same time?
-The inverter master protocol prevents this. Only one device injects at any time. See the protocol documentation for details.
+This is mandatory and non-negotiable in the design, and REV 0.6 gives it
+one more job than it had before.
 
-Last updated: 2026 — REV 0.5
-See also: docs/protocol.md — Inverter Master Protocol section
+There is no direct electrical connection between the mains and any
+low-voltage circuit:
+
+- The **ST7580's line interface** reaches the mains only through the
+  coupling transformer.
+- The **HLK-5M05** is an isolated AC-DC module; its output ground is the
+  adapter's logic ground and is galvanically separate from L and N.
+- The **USB-C cable to the Terminal** sits on that isolated secondary.
+  This is new in REV 0.6 and it matters: the user physically handles this
+  cable while the adapter is plugged into a wall socket. The isolation
+  barrier inside the HLK-5M05 is what stands between them and the mains.
+
+Consequences:
+
+- The user cannot receive a mains shock through the Terminal or its cable.
+- A fault in the digital circuits cannot energise the mains line.
+- The design follows the basic insulation requirements of IEC 60950/62368.
+
+Anyone reviewing this project for safety should start here: the isolation
+barrier is the single load-bearing safety property, and the adapter-to-
+Terminal cable is the newest thing depending on it.
+
+Protection circuit
+------------------
+
+The adapter includes two layers of line protection.
+
+**Layer 1 — Transient suppression.** TVS diode P6KE250CA (bidirectional,
+250V clamp), absorbing fast voltage spikes from lightning and switching
+transients. Response time under 1 ns.
+
+**Layer 2 — Sustained overvoltage.** MOV S20K275 (275V varistor),
+handling sustained overvoltage conditions and self-resetting once the
+overvoltage clears.
+
+Both are built in the schematic (hardware/pcb/plc-board).
+
+**Layer 3 has been removed.** Earlier revisions specified a relay
+(HK19F), an optocoupler (PC817) and a voltage-sensing circuit whose sole
+function was isolating the inverter from the line and re-synchronising at
+a zero crossing when the grid returned. With no inverter there is nothing
+for them to isolate or re-synchronise, so they are gone from the design
+rather than left as unexplained parts.
+
+What happens during a grid outage
+----------------------------------
+
+There is no voltage injection and therefore no arbitration between
+adapters. Each adapter is powered by its own Terminal over the USB-C
+cable, and all of them transmit and receive normally using CSMA/CA at the
+data layer, exactly as they do when the grid is up. The wire remains a
+conductor whether or not it is energised.
+
+This also removes the inverter master protocol entirely, which existed
+only to ensure exactly one device injected energy at a time. See
+docs/plc-adapter-power.md.
+
+Frequently asked questions
+---------------------------
+
+**Will GRIDNET damage my neighbour's television / refrigerator /
+computer?**
+No. The signal sits inside EN 50065-1's limits at 95–148.5 kHz and is
+filtered out by every household appliance's power supply.
+
+**Will GRIDNET interfere with my neighbour's HomePlug adapter?**
+HomePlug AV operates at 1.8–30 MHz, far above GRIDNET's band, so direct
+interference is unlikely. Other CENELEC-band devices in the same
+95–148.5 kHz range could conflict; GRIDNET uses CSMA/CA
+(listen-before-transmit) to minimise this.
+
+**Is it legal to put signals on the power line?**
+In Europe, yes, within EN 50065-1's limits and in the bands available to
+general-purpose equipment (95–148.5 kHz). It is *not* legal for a project
+like this to operate in the A-band, and docs/protocol.md still needs
+updating on that point. Elsewhere, check local EMC regulations.
+
+**What happens when the power goes out?**
+The adapter loses mains power and runs from the Terminal's battery over
+the USB-C cable, which the user connects. A supercapacitor in the adapter
+keeps it alive long enough to tell the Terminal that mains has gone so the
+Terminal can prompt for the cable. Networking continues normally on
+battery power; nothing is injected onto the wire.
+
+Last updated: 2026 — REV 0.6
+See also: docs/plc-adapter-power.md — the power architecture and the
+analysis behind this revision

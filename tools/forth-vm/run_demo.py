@@ -40,7 +40,7 @@ CORE_EXAMPLES = {
 # forth_vm/gridnet.py), not the illustrative pseudocode the README sketched.
 # The one deviation from the README's one-liner (`KEY? SEND-MSG`): KEY? is a
 # boolean check in real Forth (and here), so the working equivalent checks
-# it, then reads the key, then sends — see docs/inverter-master.md-style
+# it, then reads the key, then sends — see the README's
 # "Design Notes" framing: this is a documented adaptation, not a bug fix.
 CORNER_SHOP_SRC = """
     : HEADER
