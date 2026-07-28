@@ -1,6 +1,87 @@
-GRIDNET — PLC/Power Board KiCad Schematic
-REV 0.3 (Board 1, the PLC Adapter's own PCB — see "Board 1 is the PLC
+GRIDNET — PLC/Power Board KiCad Schematic + PCB
+REV 0.4 (Board 1, the PLC Adapter's own PCB — see "Board 1 is the PLC
 Adapter's PCB" below.)
+
+What changed in REV 0.4
+------------------------
+
+The board has a PCB. `plc-board.kicad_pcb` places all 62 components inside
+the 100×80mm outline, with thermal vias under both exposed pads and the
+design rules written into `plc-board.kicad_pro`. Nothing is routed yet.
+
+The thing that shapes this layout and did not exist on the Main Board is that
+**half of this board is at mains potential**:
+
+```
+  x = 0                     BARRIER_X = 30                       x = 100
+  |<----- mains side ------>|<-- 7.96mm -->|<--- isolated side --->|
+  | J1 mains in, TVS, MOV,  |   no copper  | ST7580 + coupling     |
+  | X1 cap, series inductor |  either side | filter, ESP32, power  |
+  |                         |              | tree, USB-C to the    |
+  |         U1 (HLK-5M05) --+--------------+-- Terminal, LEDs      |
+  |         T1 (coupling) --+--------------+                       |
+```
+
+Only two parts cross that band, and each crosses it *inside its own body*,
+where the manufacturer rather than this project is responsible for the
+insulation: the HLK-5M05 (AC pins one end, DC pins 33.6mm away at the other)
+and the coupling transformer. **The barrier's width is not a number this
+project picked**: it is what T1's own land pattern leaves between primary and
+secondary once the 2.2mm pads come off the 10.16mm pitch. Würth sized that
+gap for a transformer whose entire job is to sit across a mains barrier.
+
+Three mechanisms keep it that way, because placement alone would not:
+
+- `check_isolation_barrier()` in `kicad_gen/build_pcb.py` tests **every pad of
+  every net** on the board — not just the parts someone remembered to
+  classify as mains — against the band, using pad bounding boxes rather than
+  centres, since it is the copper edge that matters for creepage. It also
+  asserts that exactly `U1` and `T1` have pads on both sides. The build
+  refuses to write a board that fails either test; that refusal was checked by
+  deliberately dragging `C17` across the barrier and confirming it fired.
+- **The ground pour is clipped to the isolated side.** This is the one
+  function that could not be reused from the Main Board unchanged. There the
+  pour is the whole board; here a full-width pour would put GND copper
+  straight through the barrier, and it would do it *silently*, because a zone
+  is not a track and would not show up in a routing review. The mains side
+  gets no plane at all, which is also correct on its own terms — there is no
+  mains-referenced ground on this board, since the Schuko earth pin is unused.
+- **The stitching-via grid starts at the barrier**, not at the board edge.
+
+What the standards ask, and what is still open: reinforced insulation from
+230V mains to a user-accessible SELV circuit is usually quoted around 5mm
+creepage and 3–4mm clearance (IEC 60950-1 / 62368-1, pollution degree 2,
+material group IIIa), with 8mm a common industry rule of thumb that includes
+margin. 7.96mm sits in that band. The insulation here has to be *reinforced*
+rather than basic, because the user physically handles the USB-C cable on the
+isolated side while the adapter is in a wall socket. Confirming the exact
+figure against the standard itself is listed under "What's not done yet" — it
+is the one number in this layout taken from convention rather than from a
+document this project has read.
+
+Two findings came out of running DRC on the first placement, neither of which
+a schematic pass could have surfaced:
+
+- **The mains connector could not meet its own clearance rule.** The 2.5mm
+  L-to-N spacing in the `Mains` netclass is the standards-derived figure; the
+  5.08mm-pitch terminal block leaves 2.08mm between its own pads. The part was
+  the placeholder, not the rule, so `J1` is now a 7.62mm-pitch Würth block.
+- **The ST7580 footprint's built-in thermal vias are 0.2mm**, under the 0.3mm
+  minimum in this project's board setup and JLCPCB's standard process, which
+  hardware/bom.md's PCB line assumes. All 25 came back as `drill_out_of_range`.
+  `U4` now uses the plain QFN footprint and `add_thermal_vias()` lays a 4×4
+  array at 0.3mm — 4×4 because that is the array AN4068 measures the part's
+  50 °C/W on, not a round number.
+
+And one the DRC could not have found, which took rendering the board and
+looking at it: **the ESP32-C3-MINI-1's antenna was in the middle of the
+board.** The `-1` variant has an on-module PCB antenna and a real keepout
+zone in its footprint (5.4 × 13.2mm, marked "Antenna Area", blocking copper
+pour, tracks and vias), and the first placement had it surrounded by circuit
+on all four sides. It is now at the right edge with the antenna facing out.
+Note the asymmetry with the Main Board: that one carries the `-1U`, whose
+datasheet Note A says explicitly it has *no* keepout zone because its radio
+leaves on a cable. Same datasheet, same pin table, opposite layout rule.
 
 What changed in REV 0.3
 ------------------------
@@ -331,11 +412,22 @@ What's not done yet
   synchronise to. AN4068's circuit is recorded in docs/plc-coupling.md if
   it is ever wanted; note that its Figure 14 could not be read, so the
   block cannot be built from that list alone.
-- **PCB layout** — placement and routing haven't been started. Follow
-  the same process as the Main Board (`kicad_gen/build_pcb.py`,
-  Freerouting, `finish_routing.py`, `route.sh`). Nothing blocks it now.
-  The mains-referenced parts (`C17`, `T1`'s secondary side) need creepage
-  and clearance treatment the Main Board never had to think about.
+- **Routing.** Placement is done (REV 0.4); no copper is laid yet. The
+  Main Board's flow applies — Specctra DSN out, Freerouting, SES back in,
+  `finish_routing.py` to verify and repair, then the pour — with two
+  additions this board needs and that one did not: the autorouter must be
+  kept out of the isolation band, and `check_isolation_barrier()` has to be
+  re-run on the routed board, since today it only sees pads. A DSN keepout
+  across the band is the mechanism for the first.
+- **The pour sliver past the antenna keepout.** The GND pour currently fills
+  the ~0.7mm of board between `U2`'s antenna rule area and the right edge.
+  That is outside Espressif's own declared keepout, so it is within spec, but
+  copper at a radiating edge is worth removing with a local rule area during
+  the routing pass.
+- **The creepage figure itself.** 7.96mm comes from T1's land pattern and
+  sits inside the range convention quotes for reinforced insulation at 230V,
+  but this project has not read IEC 60950-1 or 62368-1 directly. Every other
+  number in this design traces to a datasheet; this one does not yet.
 - **The Layer 3 protection circuit** is not deferred any more — it is
   **deleted**. Relay, optocoupler and voltage sensing existed only to
   isolate the inverter from the line, and there is no inverter. Layers

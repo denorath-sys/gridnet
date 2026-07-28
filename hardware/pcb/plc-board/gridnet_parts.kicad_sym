@@ -14,7 +14,7 @@
 			(at -13.97 40.64 0)
 			(effects (font (size 1.27 1.27)))
 		)
-		(property "Footprint" "Package_DFN_QFN:QFN-48-1EP_7x7mm_P0.5mm_EP5.1x5.1mm_ThermalVias"
+		(property "Footprint" "Package_DFN_QFN:QFN-48-1EP_7x7mm_P0.5mm_EP5.1x5.1mm"
 			(at 0 0 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)

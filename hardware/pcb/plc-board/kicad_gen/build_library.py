@@ -36,7 +36,7 @@ def main() -> None:
         build_symbol(
             name="ST7580",
             reference="U",
-            footprint="Package_DFN_QFN:QFN-48-1EP_7x7mm_P0.5mm_EP5.1x5.1mm_ThermalVias",
+            footprint="Package_DFN_QFN:QFN-48-1EP_7x7mm_P0.5mm_EP5.1x5.1mm",
             description="STMicroelectronics power line networking system-on-chip (CENELEC 9-148 kHz, FSK/PSK; this design runs it in B+C, see docs/plc-coupling.md), VFQFPN48 -- pinout verified pin-by-pin against the real ST7580 datasheet (DocID022644 Rev 2): Figure 2 pinout diagram + Table 2 pin description for pins 1-48, Figure 8/9 for the power/ground scheme, Section 7 for the crystal spec",
             datasheet="https://www.st.com/resource/en/datasheet/st7580.pdf",
             verified=True,

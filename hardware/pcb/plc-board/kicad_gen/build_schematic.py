@@ -42,7 +42,7 @@ def build() -> Schematic:
 
     mains = sch.place(
         "Connector_Generic:Conn_01x02", "J", "MAINS_L_N", 30, 30,
-        footprint_override="TerminalBlock:TerminalBlock_bornier-2_P5.08mm",
+        footprint_override="TerminalBlock:TerminalBlock_Wuerth_691311400102_P7.62mm",
         ref="J1",
     )
     sch.pwr_flag(mains, "1", "AC_L")  # externally sourced from the wall outlet
