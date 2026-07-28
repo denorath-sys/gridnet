@@ -1,7 +1,34 @@
 GRIDNET — PLC/Power Board KiCad Schematic
-REV 0.2 (Board 1, the PLC Adapter's own PCB — see "Board 1 is the PLC
-Adapter's PCB" below. hardware/bom.md still lists the inverter parts that
-REV 0.2 removes; that BOM revision is pending.)
+REV 0.3 (Board 1, the PLC Adapter's own PCB — see "Board 1 is the PLC
+Adapter's PCB" below.)
+
+What changed in REV 0.3
+------------------------
+
+The line coupling is built. That was the last open block on this board and
+the reason its PCB layout had not started: the ST7580 datasheet specifies
+the PA's pins but not the network hung off them, and AN4068 — which does —
+could not be retrieved from this environment. It was eventually read, and
+the whole section between `TX_OUT`/`PA_OUT` and the mains now exists.
+
+The values are **not** AN4068's. Its reference design is a CENELEC A-band
+node — receive filter on 80 kHz, coupling resonance on 85 kHz, sensitivity
+specified at 86 kHz — and A-band is allocated to electricity suppliers.
+GRIDNET sits in B+C, 95–140 kHz, which puts our entire band on the skirt of
+their filters. Each resonance was rescaled to ~117 kHz holding AN4068's own
+Q values and its own ratios between corner frequency and band edge; every
+resistor keeps its reference value and only the reactive parts move.
+[`docs/plc-coupling.md`](../../../docs/plc-coupling.md) has the arithmetic,
+the cross-checks, and what the filters still do not do.
+
+Also settled here: the coupling transformer. AN4068 names the part
+(**Würth 750510231**), and its specification sheet meets every line of
+AN4068's Table 4 except the withstanding-voltage row, where it quotes
+2000 VAC for 1 s against Table 4's ≥4 kV — different tests, not necessarily
+a conflict, but not something to assume about a galvanic barrier to 230 V.
+It carries a custom symbol with the part's real terminal numbers (primary
+1–4, secondary 10–7) rather than KiCad's generic 1/2–3/4 transformer, and a
+footprint built from the sheet's own recommended land pattern.
 
 What changed in REV 0.2
 ------------------------
@@ -29,10 +56,10 @@ covering the moment of grid loss. And the **inverter is gone**, replaced
 by a proper 12V rail for the power amplifier that was always going to do
 the actual signalling.
 
-Two of the three original gaps are therefore closed rather than deferred.
-The third — the coupling transformer and PA output network — is still
-open, but it now waits on one specific document rather than on open
-design questions. See "What's not done yet".
+Two of the three original gaps were therefore closed rather than deferred.
+The third — the coupling transformer and PA output network — waited on one
+specific document rather than on open design questions, and REV 0.3 closed
+it too.
 
 What this is
 ------------
@@ -165,12 +192,20 @@ What *is* built and ERC-clean:
 - Status LEDs: Power (always-on), PLC (driven directly by the ST7580's
   `PL_TX_ON`), Wi-Fi (GPIO-driven, so firmware can blink it for real
   status rather than it being a second always-on LED).
+- **The line coupling (REV 0.3)**: the transmit active filter around the
+  ST7580's own power amplifier (`R15`/`C12` R-C pre-filter, then a
+  Sallen-Key cell on `PA_IN±`/`PA_OUT`), the receive passive filter into
+  `RX_IN`, and the coupling itself — DC block, `T1`, the series inductor
+  and the X1 safety capacitor into `AC_L`/`AC_N`. Topology from AN4068
+  section 7.1, values rescaled from its A-band centre to GRIDNET's B+C
+  band. Every number in [`docs/plc-coupling.md`](../../../docs/plc-coupling.md).
 
 Datasheet verification
 ------------------------
 
-Both custom-built symbols were checked pin-by-pin against primary-source
-datasheets before being written into `kicad_gen/build_library.py`, same
+All three custom-built symbols were checked pin-by-pin against
+primary-source datasheets before being written into
+`kicad_gen/build_library.py`, same
 standard as the Main Board's parts:
 
 - **ST7580** — checked against STMicroelectronics' real datasheet
@@ -193,12 +228,26 @@ standard as the Main Board's parts:
   ../main-board/README.md's "The antenna path never touched the board").
   The difference between the variants is only where the radio goes: an
   on-module PCB antenna here, an on-module W.FL/MHF III jack on the -1U.
+- **Würth 750510231** (the coupling transformer) — terminals and every
+  electrical parameter checked against Würth's own specification sheet
+  (rev 6E, 8/22). It exists as a custom symbol for one reason: the real
+  part's terminals are **1/4** (primary) and **10/7** (secondary), while
+  KiCad's `Device:Transformer_1P_1S` numbers its pins 1/2 and 3/4. Using
+  the generic symbol would have put a wrong pin number into the netlist
+  and shown up, if at all, on the PCB — which is exactly how this project
+  has lost two passes already. Its parameters against AN4068 Table 4 are
+  tabulated in [`docs/plc-coupling.md`](../../../docs/plc-coupling.md);
+  six of seven rows pass outright and the seventh (withstanding voltage)
+  is an open question about test methods, not a failure.
 - **Footprints**: ST7580 uses a bundled KiCad `QFN-48-1EP_7x7mm_P0.5mm`
   footprint sized to the datasheet's Table 14 exposed-pad dimensions
   (5.1×5.1mm typ., closest bundled option). ESP32-C3-MINI-1 uses the
   real footprint vendored from Espressif's official KiCad library into
   `gridnet_footprints.pretty/` (CC-BY-SA 4.0), same source and process as
   the Main Board's MINI-1U footprint — see that directory's README.md.
+  `T1` uses a footprint built for this project from the "recommended P.C.
+  pattern" on Würth's own sheet: four ⌀1.20mm holes on a 10.16 × 7.62mm
+  rectangle, 14.22mm square body, 13.48mm high.
 
 Real KiCad library parts used as-is (same confidence as any normal KiCad
 design, no custom symbol needed): `Device:D_TVS`, `Device:Varistor`,
@@ -213,14 +262,14 @@ ERC result
 kicad-cli sch erc plc-board.kicad_sch --format json -o /tmp/erc.json
 ```
 
-**296 violations, 0 errors.** (This file said 212 through the REV 0.2
-pass that took the board from 29 to 47 components; the count was never
-re-run afterwards. The categories and the reasoning below were unchanged
-by it — only the off-grid endpoint count grew, one per new pin.) Same
-benign categories as the Main Board's ERC results, for the same reasons
-(see that board's README for detail): `endpoint_off_grid` (293,
-cosmetic), `lib_symbol_issues` (2) and
-`footprint_link_issues` (1) (this headless environment doesn't have
+**350 violations, 0 errors.** (This file said 212 until REV 0.3 re-ran it.
+That figure predated the REV 0.2 pass which took the board from 29 to 47
+components, and nobody re-counted; the categories and the reasoning below
+were unchanged by either pass, only the off-grid endpoint count, which
+grows by one per new pin.) Same benign categories as the Main Board's ERC
+results, for the same reasons (see that board's README for detail):
+`endpoint_off_grid` (345, cosmetic), `lib_symbol_issues` (3) and
+`footprint_link_issues` (2) (this headless environment doesn't have
 `gridnet_parts`/`gridnet_footprints` registered as project libraries;
 both load and place correctly regardless).
 
@@ -263,35 +312,38 @@ Net plan (high level)
 What's not done yet
 --------------------
 
-- **The PA output network and line coupling** — the one remaining gap,
-  and it is now a documentation problem rather than a design one. The
-  ST7580 datasheet specifies the PA's pins, its output rating and its
-  current-limit circuit, all of which are built. It does **not** give the
-  reference coupling circuit: the PA output network, the series coupling
-  capacitor, the `RX_IN` path and the transformer's turns ratio and
-  saturation rating all live in ST's AN4068 design guide, which could not
-  be retrieved from this environment (st.com serves 0 bytes here; the
-  datasheet itself was only available because an earlier session had
-  cached it). `PA_OUT`, `PA_IN±`, `TX_OUT`, `RX_IN` and `ZC_IN` are
-  marked `no_connect` rather than guessed at. hardware/bom.md's note that
-  the Würth WE-PLCC part needs confirming against that application note
-  still stands.
-- **`ZC_IN` (zero-crossing)** — with no relay left to align to a zero
-  crossing, its remaining uses are mains-presence detection and PLC
-  timing. No circuit yet.
+- **A conducted-emission measurement.** The coupling network is built and
+  its arithmetic checks out, but harmonic suppression is inherently weaker
+  in B+C than in the A band — a 95 kHz carrier puts its second harmonic at
+  190 kHz, below the Sallen-Key corner, where the 3-pole network only takes
+  off ~2.7 dB. The ST7580's own transmitter linearity (0.1–0.2 % THD,
+  −70 dBc typical HD3) is doing most of the work. AN4068 earns its
+  compliance claim with a LISN sweep (its section 8.2); GRIDNET needs the
+  same before claiming EN 50065-1 conformance. See
+  [`docs/plc-coupling.md`](../../../docs/plc-coupling.md).
+- **The transformer's withstanding voltage.** Würth quotes 2000 VAC for
+  1 s; AN4068 Table 4 asks for ≥4 kV, which comes from EN 50065-4-2's
+  impulse test. Probably compatible, not demonstrably so — confirm with
+  Würth before fabrication.
+- **`ZC_IN` (zero-crossing)** — deliberately not built, not merely absent.
+  The datasheet calls it optional, docs/protocol.md defines no
+  mains-synchronous behaviour, and during an outage there is no mains to
+  synchronise to. AN4068's circuit is recorded in docs/plc-coupling.md if
+  it is ever wanted; note that its Figure 14 could not be read, so the
+  block cannot be built from that list alone.
 - **PCB layout** — placement and routing haven't been started. Follow
   the same process as the Main Board (`kicad_gen/build_pcb.py`,
-  Freerouting, `finish_routing.py`, `route.sh`) once the coupling network
-  above exists; routing around an unbuilt PA section now would just need
-  redoing.
+  Freerouting, `finish_routing.py`, `route.sh`). Nothing blocks it now.
+  The mains-referenced parts (`C17`, `T1`'s secondary side) need creepage
+  and clearance treatment the Main Board never had to think about.
 - **The Layer 3 protection circuit** is not deferred any more — it is
   **deleted**. Relay, optocoupler and voltage sensing existed only to
   isolate the inverter from the line, and there is no inverter. Layers
   1–2 (TVS, MOV) remain and are built.
-- **Which CENELEC band.** A-band (9–95 kHz) is allocated to electricity
-  suppliers; general-purpose equipment belongs in 95–148.5 kHz.
-  docs/protocol.md specifies A-band throughout and needs revisiting. The
-  ST7580 covers both.
+- **Which CENELEC band, in the protocol docs.** The hardware is no longer
+  undecided: the coupling network is tuned for B+C, 95–140 kHz, and
+  changing that means changing four component values. docs/protocol.md
+  still describes A-band operation in places and needs to catch up.
 - **`J1`'s replacement**: the BOM's `J1` (Schuko-plug + LED wiring) isn't
   in this schematic pass — the mains connector here (also called `J1` in
   the generated schematic, a coincidental naming collision, not the same

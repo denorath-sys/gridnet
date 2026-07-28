@@ -6,9 +6,13 @@ same board).
 Same two-part strategy as the Main Board library (see that directory's
 build_library.py): real symbol blocks copied programmatically from KiCad's
 own bundled libraries where a real or pin-compatible match exists, and
-custom-built generic-rectangle symbols only for the two parts that don't:
-ST7580 and ESP32-C3-MINI-1. Both were checked pin-by-pin against their
-primary-source datasheets before being written here -- see README.md.
+custom-built generic-rectangle symbols only for the three parts that don't:
+ST7580, ESP32-C3-MINI-1 and the Wuerth 750510231 coupling transformer. All
+three were checked pin-by-pin against their primary-source datasheets before
+being written here -- see README.md. The transformer is custom for a
+different reason than the other two: KiCad has a perfectly good 1P_1S
+transformer symbol, but it numbers its pins 1/2 and 3/4 and the real part's
+terminals are 1/4 and 10/7.
 """
 
 from __future__ import annotations
@@ -33,7 +37,7 @@ def main() -> None:
             name="ST7580",
             reference="U",
             footprint="Package_DFN_QFN:QFN-48-1EP_7x7mm_P0.5mm_EP5.1x5.1mm_ThermalVias",
-            description="STMicroelectronics power line networking system-on-chip (CENELEC A-band, FSK/PSK), VFQFPN48 -- pinout verified pin-by-pin against the real ST7580 datasheet (DocID022644 Rev 2): Figure 2 pinout diagram + Table 2 pin description for pins 1-48, Figure 8/9 for the power/ground scheme, Section 7 for the crystal spec",
+            description="STMicroelectronics power line networking system-on-chip (CENELEC 9-148 kHz, FSK/PSK; this design runs it in B+C, see docs/plc-coupling.md), VFQFPN48 -- pinout verified pin-by-pin against the real ST7580 datasheet (DocID022644 Rev 2): Figure 2 pinout diagram + Table 2 pin description for pins 1-48, Figure 8/9 for the power/ground scheme, Section 7 for the crystal spec",
             datasheet="https://www.st.com/resource/en/datasheet/st7580.pdf",
             verified=True,
             pins=[
@@ -146,6 +150,37 @@ def main() -> None:
                 Pin("51", "GND", "pwr", "right"),
                 Pin("52", "GND", "pwr", "right"),
                 Pin("53", "GND", "pwr", "right"),
+            ],
+        )
+    )
+
+    # The PLC line coupling transformer. A custom symbol rather than KiCad's
+    # Device:Transformer_1P_1S because that symbol numbers its pins 1/2
+    # (primary) and 3/4 (secondary), and the real part's terminals are 1/4
+    # and 10/7 -- exactly the kind of pin-number mismatch this project keeps
+    # finding on the PCB rather than in the schematic. Verified against
+    # Wuerth's own specification sheet for 750510231 (rev 6E, 8/22).
+    parts.append(
+        build_symbol(
+            name="PLC_COUPLING_TRANSFORMER",
+            reference="T",
+            footprint="gridnet_footprints:Transformer_Wuerth_750510231",
+            description=(
+                "PLC line coupling transformer, 1:1 +/-1%, Wuerth 750510231 (AN4068's own part, "
+                "alternate TDK SRW13EP-X05H002) -- terminals and electrical parameters verified against "
+                "Wuerth's specification sheet: primary 1-4, secondary 10-7, inductance 1-4 = 1.00 mH "
+                "+35/-25% at 100 kHz, leakage <=1.0 uH, DC resistance <=0.20 ohm per winding, "
+                "interwinding capacitance <=30 pF, dielectric 1-10 = 2000 VAC for 1 s. "
+                "Meets every line of AN4068 Table 4 except that the 2000 VAC dielectric figure is not "
+                "the same test as Table 4's >=4 kV withstanding voltage -- see README.md."
+            ),
+            datasheet="https://www.we-online.com/components/products/datasheet/750510231.pdf",
+            verified=True,
+            pins=[
+                Pin("1", "PRI_A", "pas", "left"),
+                Pin("4", "PRI_B", "pas", "left"),
+                Pin("10", "SEC_A", "pas", "right"),
+                Pin("7", "SEC_B", "pas", "right"),
             ],
         )
     )
