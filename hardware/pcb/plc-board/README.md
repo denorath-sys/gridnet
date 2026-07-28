@@ -1,7 +1,38 @@
 GRIDNET — PLC/Power Board KiCad Schematic
-REV 0.1 (matches hardware/bom.md's Board 1 — PLC/Power Board bill of
-materials, which is the PLC Adapter's own PCB — see "Board 1 is the PLC
-Adapter's PCB" below)
+REV 0.2 (Board 1, the PLC Adapter's own PCB — see "Board 1 is the PLC
+Adapter's PCB" below. hardware/bom.md still lists the inverter parts that
+REV 0.2 removes; that BOM revision is pending.)
+
+What changed in REV 0.2
+------------------------
+
+REV 0.1 left three gaps and said they needed power-electronics design
+this project's docs didn't specify: no supply for the ST7580's 8–18V
+`VCC`, no gate driver for the IRF540N inverter, and no defined inverter
+topology. Trying to answer them turned up two problems that made the
+questions themselves wrong, both written up in **docs/plc-adapter-power.md**:
+
+1. **The adapter had no power source during an outage at all.** Its only
+   supply was the HLK-5M05, which needs 90–264V AC. When the grid fails
+   the adapter stops — so it could never have run an inverter, and the
+   24V it was supposed to inject could not have powered a neighbouring
+   adapter either. The firmware protocol had already been written against
+   a battery (`MASTER_ALIVE.battery_pct`) that the BOM never contained.
+2. **The 24V injection is outside EN 50065-1.** The A-band limit is
+   5 Vrms at 9 kHz falling to 1 Vrms at 95 kHz; 24V is 5–24× over it. The
+   ST7580's own PA delivers 14 V p-p — 4.95 Vrms — because ST sized the
+   part to land on that limit.
+
+So REV 0.2 does two things. The adapter is now **powered from the
+Terminal's battery** over a detachable USB-C cable, with a supercapacitor
+covering the moment of grid loss. And the **inverter is gone**, replaced
+by a proper 12V rail for the power amplifier that was always going to do
+the actual signalling.
+
+Two of the three original gaps are therefore closed rather than deferred.
+The third — the coupling transformer and PA output network — is still
+open, but it now waits on one specific document rather than on open
+design questions. See "What's not done yet".
 
 What this is
 ------------
@@ -50,36 +81,72 @@ History" item 6 for the full writeup):
 What this covers, and what it deliberately doesn't
 -----------------------------------------------------
 
-This pass builds every part of the circuit that's fully specified by a
+This board builds every part of the circuit that's fully specified by a
 primary source — a datasheet section, or an unambiguous line in this
 project's own docs — and stops there rather than guessing at the parts
-that aren't. Three real gaps came out of trying to design the rest, none
-of which are addressed by any existing GRIDNET document:
+that aren't.
 
-1. **The ST7580's `VCC` pin (8-18V, powers the PA and the internal AFE
-   regulator) has no supply on this board.** The only power source in
-   the BOM, HLK-5M05, outputs 5V — enough for `VDDIO` but below `VCC`'s
-   8V minimum. `VCC` is marked with a `PWR_FLAG`'d net
-   (`VCC_8-18V_NOT_SUPPLIED`) rather than wired to anything, so ERC
-   reports it honestly as externally-sourced-but-not-actually-driven
-   instead of silently accepting a wrong connection.
-2. **The IRF540N inverter has no gate drive.** IRF540N is not a
-   logic-level MOSFET; an ESP32 GPIO alone can't fully enhance it against
-   an 8-18V drain supply. No gate driver IC is in the BOM.
-3. **The exact inverter topology is unspecified.** docs/inverter-master.md
-   and docs/electrical-safety.md describe the *function* (2 MOSFETs inject
-   24V AC onto the line) but not the circuit — push-pull vs. half-bridge,
-   transformer turns ratio, none of it.
+### The power architecture (REV 0.2)
 
-All three block the same two things: the ST7580's PA/AFE/line-coupling
-pins (`PA_OUT`, `PA_IN+`, `PA_IN-`, `TX_OUT`, `RX_IN`, `CL`, `CL_SEL`,
-`ZC_IN`) and the inverter/relay/optocoupler section (protection Layer 3
-of docs/electrical-safety.md — it isolates the *inverter* from the line,
-so it has no defined role without one). Both are left out of this
-schematic entirely rather than filled in with an unreviewed guess at a
-mains-referenced power circuit. See "What's not done yet" below.
+Three sources feed one 5V rail, ORed with Schottky diodes:
 
-What *is* built and DRC/ERC-clean this pass:
+```
+  mains ──► HLK-5M05 ──┐
+                       ├──►┤◄── +5V ──┬──► AMS1117-3.3 ──► +3V3
+  Terminal ─► USB-C ───┘              │
+                                      └──► MT3608 boost ──► +12V ──► ST7580 VCC
+                                 10Ω ─┴─ 1F supercap
+```
+
+- **ORing with Schottkys** (`D5`/`D6`) rather than an ideal-diode
+  controller, consistent with this BOM's price point. ~0.3V drop leaves
+  ~4.7V, above the boost's input minimum and still enough headroom for
+  the AMS1117 at the ~100mA it supplies.
+- **`J4`, the Terminal inlet**, is a USB-C receptacle strapped as a sink
+  (5.1k CC pull-downs), power-only — no USB data on this board. It sits
+  on the HLK-5M05's *isolated secondary*. The user handles this cable, so
+  the isolation barrier docs/electrical-safety.md calls non-negotiable is
+  what stands between them and the mains side.
+- **`C7`, the 1F supercapacitor**, charges through `R11` (~500mA inrush
+  limit) and discharges through `D7`, keeping the resistor out of the
+  discharge path. Its job is not to keep the adapter running — it is to
+  keep the ESP32-C3 alive long enough to tell the Terminal over Wi-Fi
+  that mains has gone, so the Terminal can put "connect the adapter
+  cable" on screen. 6.4J per farad between 5V and the boost's ~3.5V
+  minimum; a couple of seconds of Wi-Fi is well under 1J.
+- **`U5`, the MT3608 boost**, is a real KiCad library part, not a custom
+  symbol. Values from its own datasheet: `VREF` = 0.6V and
+  `VOUT = VREF × (1 + R1/R2)`, so 12V needs R1/R2 = 19 — 19.1k/1k gives
+  12.06V. 22µH inductor (its recommended 4.7–22µH range), 22µF ceramic in
+  and out, plus 100µF bulk on 12V to ride transmit bursts. It's an
+  asynchronous boost, so the rectifier `D8` is external.
+
+12V was chosen for `VCC` because it sits mid-window in the datasheet's
+8/13/18V range and well clear of the 6.1–7.5V undervoltage lockout.
+
+### Transmit current limit
+
+The ST7580 has a hardware output-current limit set by one resistor. It
+mirrors 1/`CL_RATIO` of the PA output current through `RCL` to `VSS` and,
+once that voltage passes `CL_TH`, walks `TX_GAIN` down a step at a time
+until it's back under (datasheet Section 5.4):
+
+```
+RCL = CL_TH × CL_RATIO / I(PA_OUT) peak     CL_TH = 2.35V, CL_RATIO = 80
+```
+
+Checked against the datasheet's own Table 8: 1 A RMS FSK is 1.41 A peak →
+2.35 × 80 / 1.41 = 133 Ω, exactly the tabulated value.
+
+`R14` = 270R sets a 500 mA RMS ceiling, bounding what the Terminal's
+battery has to supply. It's a backstop, not the operating point —
+firmware sets `TX_GAIN` lower still on battery. `CL_SEL`, which would
+switch `RCL` between FSK and PSK crest factors, is not used; one fixed
+resistor means the effective ceiling differs slightly between
+modulations, which is fine for a backstop, and it's a digital output so
+leaving it open is safe.
+
+What *is* built and ERC-clean:
 
 - Mains input (`J1`) with Layers 1-2 protection: TVS (`D_TVS`,
   P6KE250CA) and MOV (`Varistor`, S20K275) across L/N.
@@ -187,22 +254,35 @@ Net plan (high level)
 What's not done yet
 --------------------
 
-- **The ST7580's `VCC` supply, the inverter, and the PA/line-coupling
-  section** — see "What this covers, and what it deliberately doesn't"
-  above. This is the big one: it needs real power-electronics design
-  (a boost converter or second AC-DC tap for 8-18V, a gate driver IC,
-  a defined inverter topology, and the coupling transformer
-  hardware/bom.md already flags as unconfirmed against ST7580's
-  application note), not something to guess at from the docs this
-  project currently has.
+- **The PA output network and line coupling** — the one remaining gap,
+  and it is now a documentation problem rather than a design one. The
+  ST7580 datasheet specifies the PA's pins, its output rating and its
+  current-limit circuit, all of which are built. It does **not** give the
+  reference coupling circuit: the PA output network, the series coupling
+  capacitor, the `RX_IN` path and the transformer's turns ratio and
+  saturation rating all live in ST's AN4068 design guide, which could not
+  be retrieved from this environment (st.com serves 0 bytes here; the
+  datasheet itself was only available because an earlier session had
+  cached it). `PA_OUT`, `PA_IN±`, `TX_OUT`, `RX_IN` and `ZC_IN` are
+  marked `no_connect` rather than guessed at. hardware/bom.md's note that
+  the Würth WE-PLCC part needs confirming against that application note
+  still stands.
+- **`ZC_IN` (zero-crossing)** — with no relay left to align to a zero
+  crossing, its remaining uses are mains-presence detection and PLC
+  timing. No circuit yet.
 - **PCB layout** — placement and routing haven't been started. Follow
   the same process as the Main Board (`kicad_gen/build_pcb.py`,
-  Freerouting) once the above is resolved enough to route meaningfully;
-  routing around a fully-unpowered VCC/PA section now would just need
+  Freerouting, `finish_routing.py`, `route.sh`) once the coupling network
+  above exists; routing around an unbuilt PA section now would just need
   redoing.
-- **The Layer 3 protection circuit** (relay + optocoupler + voltage
-  sensing, per docs/electrical-safety.md) — deferred with the inverter,
-  since its whole function is isolating the inverter from the line.
+- **The Layer 3 protection circuit** is not deferred any more — it is
+  **deleted**. Relay, optocoupler and voltage sensing existed only to
+  isolate the inverter from the line, and there is no inverter. Layers
+  1–2 (TVS, MOV) remain and are built.
+- **Which CENELEC band.** A-band (9–95 kHz) is allocated to electricity
+  suppliers; general-purpose equipment belongs in 95–148.5 kHz.
+  docs/protocol.md specifies A-band throughout and needs revisiting. The
+  ST7580 covers both.
 - **`J1`'s replacement**: the BOM's `J1` (Schuko-plug + LED wiring) isn't
   in this schematic pass — the mains connector here (also called `J1` in
   the generated schematic, a coincidental naming collision, not the same

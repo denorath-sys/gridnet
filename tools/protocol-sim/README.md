@@ -1,10 +1,8 @@
 # GRIDNET Protocol Simulator
 
 A pure-Python, hardware-independent reference implementation of
-[`docs/protocol.md`](../../docs/protocol.md) and
-[`docs/inverter-master.md`](../../docs/inverter-master.md). It exists to
-validate the mesh routing and inverter master election logic *before* the
-hardware prototype exists — the firmware architecture doc lists the protocol
+[`docs/protocol.md`](../../docs/protocol.md). It exists to validate the mesh
+routing and store-and-forward logic *before* the hardware prototype exists — the firmware architecture doc lists the protocol
 stack as "✅ Complete," but until now that meant "specified in prose,"
 not "specified and exercised by running code."
 
@@ -25,12 +23,9 @@ No dependencies beyond the Python 3 standard library.
   and collisions between overlapping transmissions. Simplified (no PHY-level
   bit errors, no capture effect) — it's here to exercise the *link-layer
   contention* the protocol assumes, not to model CENELEC OFDM/FSK.
-- **Mesh flooding + store-and-forward + inverter master election**
-  (`gridnet_sim/node.py`) — a `Node` that floods unknown destinations,
-  relays each `(src, seq)` exactly once, retries undelivered messages until
-  ACKed or expired, and runs the full inverter master state machine
-  (listen → master/slave → failover → split-brain resolution) from
-  `docs/inverter-master.md`.
+- **Mesh flooding + store-and-forward** (`gridnet_sim/node.py`) — a `Node`
+  that floods unknown destinations, relays each `(src, seq)` exactly once,
+  and retries undelivered messages until ACKed or expired.
 - **ROUTE distance-vector routing** (`gridnet_sim/node.py`) — periodic
   table advertisements (own routes, hop-incremented) per
   `docs/protocol.md`'s REV 0.5 ROUTE Packet section, converging multi-hop
@@ -47,21 +42,28 @@ python3 -m unittest discover -s tests -v
 ```
 
 Nine scenarios are in `gridnet_sim/scenarios.py`: `basic-exchange`,
-`multihop-flood`, `routing`, `store-and-forward`, `master-election`,
-`master-election-worst-case`, `cold-join`, `master-failover`,
-`channel-fallback`. 36 unit tests in `tests/` cover packet framing, flooding
-loop-prevention, store-and-forward, distance-vector route convergence, and
-the inverter master state machine — all deterministic (seeded RNGs), run in
-well under a second.
+`multihop-flood`, `routing`, `store-and-forward`, `channel-fallback`. 29
+unit tests in `tests/` cover packet framing, flooding loop-prevention,
+store-and-forward and distance-vector route convergence — all deterministic
+(seeded RNGs), run in well under a second.
 
 ## Findings — and the fixes applied for them (REV 0.5)
 
 Building and extending this surfaced three things about the *documented*
 protocol (two REV 0.4 behavioral gaps, one packet type named but never
 defined) and two bugs in the simulator's own code, one found while fixing
-the other. All five are fixed. `docs/inverter-master.md` REV 0.5's "Design
-Notes — REV History" section has the writeup for #1–2 aimed at firmware
-readers who don't want to read this file.
+the other. All five were fixed.
+
+> **Note on #1–3.** These concern the inverter master election protocol,
+> which has since been **removed from GRIDNET entirely** — the PLC Adapter
+> turned out to have no power source during a grid outage, so it could never
+> have run an inverter, and the 24V injection the protocol arbitrated sat
+> well outside EN 50065-1's limits. See
+> [`docs/plc-adapter-power.md`](../../docs/plc-adapter-power.md). The
+> corresponding code, tests and scenarios are gone from this simulator. The
+> writeups are kept because the reasoning — about jitter, listen windows and
+> shared RNG state — is worth having on the record, and because #5 in
+> particular is a general lesson that outlived the feature that exposed it.
 
 ### 1. FIXED — Simultaneous grid loss reliably triggered split-brain, not just as an edge case
 
@@ -128,13 +130,13 @@ after the fix (0 failures, previously ~35% failure rate).
 ### 4. FIXED (protocol gap) — ROUTE (0x04) was named but never defined
 
 `docs/protocol.md`'s message-type table listed `ROUTE 0x04 — Routing table
-update` alongside MASTER_ALIVE and MASTER_RESIGN, but unlike those two (which
-got full C structs in `docs/inverter-master.md`), ROUTE had zero payload
+update` alongside the (then-present) MASTER_ALIVE and MASTER_RESIGN types,
+but unlike those two — which had full C structs — ROUTE had zero payload
 definition anywhere — and "Mesh Routing" claimed every device maintains "a
 neighbor table (address, hop count, last seen)" with no mechanism specified
 for how a hop count beyond 1 would ever be learned. The simulator's own
-flooding logic only ever produced 1-hop `known_nodes` entries (for inverter
-master candidacy, deliberately segment-scoped) — there was no path to actual
+flooding logic only ever produced 1-hop `known_nodes` entries
+(deliberately segment-scoped) — there was no path to actual
 multi-hop reachability info anywhere in this codebase either.
 
 **Fix**: `docs/protocol.md` REV 0.5 now defines ROUTE as a distance-vector
@@ -154,9 +156,9 @@ version drew it from `self._rng` — the same RNG `grid_lost()`/`cold_join()`
 use for listen-delay jitter, and the one tests seed for reproducibility. That
 extra draw at construction time shifted every subsequent draw from that
 stream, silently changing the jitter values the already-passing
-inverter-master tests depended on — `test_simultaneous_grid_loss_no_longer_reliably_collides`
+then-present inverter-master tests depended on — `test_simultaneous_grid_loss_no_longer_reliably_collides`
 started intermittently failing (split-brain rate crept from comfortably under
-20% to 23%) with no change to any inverter-master code at all. Fixed by
+20% to 23%) with no change to that code at all. Fixed by
 giving the ROUTE stagger its own independent `self._route_rng` — sharing a
 stateful RNG across unrelated concerns is exactly the kind of coupling that's
 invisible until something downstream reads the stream differently.
@@ -189,13 +191,12 @@ tools/protocol-sim/
 │   ├── crc16.py             CRC16/CCITT-FALSE
 │   ├── packet.py             wire framing, encode/decode
 │   ├── medium.py              shared broadcast channel, CSMA/CA, collisions
-│   ├── node.py                 flooding, store-and-forward, inverter master FSM
-│   ├── scenarios.py             nine runnable demonstrations
+│   ├── node.py                 flooding, store-and-forward, distance-vector routing
+│   ├── scenarios.py             five runnable demonstrations
 │   └── simulator.py              discrete-event core
 └── tests/
     ├── test_packet.py
     ├── test_flooding.py
     ├── test_routing.py
-    ├── test_store_and_forward.py
-    └── test_inverter_master.py
+    └── test_store_and_forward.py
 ```
