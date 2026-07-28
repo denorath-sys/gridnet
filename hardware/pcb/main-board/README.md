@@ -1,5 +1,5 @@
 GRIDNET — Main Board KiCad Schematic
-REV 0.7 (matches hardware/bom.md's Board 2 — Main Board bill of materials)
+REV 0.8 (matches hardware/bom.md's Board 2 — Main Board bill of materials)
 
 What this is
 ------------
@@ -8,8 +8,9 @@ A KiCad 9 schematic (`main-board.kicad_sch`) for the Main Board, covering
 the full circuit from hardware/bom.md's "Board 2" line items: USB-C power
 input, Li-ion charge/boost/regulation, the GD32VF103CCT6 MCU with clock/
 reset/boot/SWD, SPI flash + SRAM + microSD + RTC, the ESP32-C3-MINI-1U
-wireless module with its antenna path, and the off-board connectors for
-the display, keyboard controller, keyboard backlight, and speaker.
+wireless module, and the off-board connectors for the display, keyboard
+controller, keyboard backlight, and speaker. There is no antenna path on
+this board and no RF net — see "The antenna path never touched the board".
 
 Alongside it, `main-board.kicad_pcb` has every part placed within the
 100x80mm board outline from hardware/bom.md, **fully routed** on 2
@@ -17,7 +18,22 @@ layers (F.Cu/B.Cu) with sized power traces, and **poured with ground on
 both layers**. `kicad-cli pcb drc` comes back completely clean: 0
 violations of any severity, 0 unconnected items.
 
-REV 0.7 is a pre-fabrication design-review pass over the routed board.
+REV 0.8 continues the pre-fab review with two findings that the REV 0.7
+pass created the conditions to see, both about things the board *claimed*
+to have and did not:
+
+1. **The antenna path never touched the board.** A phantom U.FL connector
+   (`J7`) duplicating one the module already carries, a fictional `/ANT_RF`
+   trace to the SMA, and an invented `ANT` symbol pin behind both. All
+   three are gone, and with them the RF layout gap that headed "What's not
+   done yet". See "The antenna path never touched the board".
+2. **The "grid of stitching vias" was one column of nine**, because
+   `BOX2I.Inflate()` mutates in place. The pours were tied together only
+   down the left edge: the worst-case point on the board was 55mm from the
+   nearest GND via. Now 16.8mm. See "The stitching grid was one column of
+   nine vias".
+
+REV 0.7 was the pre-fabrication design-review pass over the routed board.
 Four things came out of it, in rough order of how badly they would have
 bitten:
 
@@ -51,6 +67,129 @@ across the sheet); the PCB script places real footprints using each
 part's actual courtyard geometry (measured via `pcbnew`, not guessed) so
 placement is collision-free from the start. `kicad_gen/route.sh` drives
 the whole sequence end to end; see "Regenerating / validating" below.
+
+The antenna path never touched the board
+-----------------------------------------
+
+"What's not done yet" used to open with RF layout: `/ANT_RF` ran from `U9`
+to a U.FL pad (`J7`) and on to the edge-mount SMA (`J8`) at whatever width
+Freerouting chose, and wanted a coplanar-waveguide geometry computed for
+this stackup. Working out that geometry was the plan for this pass. The
+first thing that turns up on opening the board is that **`/ANT_RF` has no
+`U9` pad on it at all** — the net is two connectors wired to each other,
+and nothing drives it.
+
+The ESP32-C3-MINI-1U does not bring its radio out to a castellated pad.
+Datasheet v2.2 Table 3-1 lists all 53 pads: pins 1, 2, 11, 14 and 36–53
+are GND, and the rest are `3V3`, `EN` and IO. There is no ANT and no RF
+pad anywhere in the list. The radio leaves the module through the antenna
+jack **mounted on the module itself** — that is what the "U" in `-1U`
+means. So:
+
+- `kicad_gen/build_library.py`'s symbol had a pin whose *number* was the
+  string `"ANT"`, matching no pad in the footprint. That is why the
+  netlist quietly produced a two-connector net instead of an error: KiCad
+  ties schematic pins to footprint pads by pin number, and a pin number
+  that matches nothing simply contributes nothing.
+- `J7` was a second, board-mounted U.FL duplicating the module's own. The
+  schematic comment beside it said as much — "U.FL pad on the
+  ESP32-C3-MINI-1U module itself" — but it was placed on the PCB as a real
+  footprint at (80, 35.53) anyway.
+- The trace from `J7` to `J8` was therefore 19mm of copper (three
+  segments, 0.2mm wide) between two connectors and nothing else, which is
+  what an RF review would have been asked to impedance-match.
+
+Worse, an edge-mount SMA soldered to the board cannot be reached by a
+pigtail in the first place: its centre pin *is* a board pad. hardware/bom.md
+line items 13 and 14 described exactly that — an SMA connector plus a
+"U.FL-to-SMA pigtail" to connect the module to it — which cannot be
+assembled as written.
+
+**And the pigtail was the wrong connector generation.** Datasheet section
+10.2 specifies the module's jack as the *third generation* connector,
+compatible with Hirose **W.FL**, I-PEX **MHF III** and Amphenol **AMC**,
+with a body of 2.05 x 1.7 x 1.40mm (Figure 10-3). U.FL / MHF I is the
+first generation and about 2.6mm across. A U.FL plug does not mate with it.
+Every mention of "U.FL" in this project's Board 2 documentation was wrong
+about the part on the module, independently of everything above.
+
+What the board looks like now: `J7` and `J8` are gone from the schematic,
+from `PLACEMENT` in `build_pcb.py` and from the PCB; the `ANT` pin is gone
+from the symbol; `/ANT_RF` is gone as a net. The antenna is a cable
+assembly and a case feature, not copper — an MHF III/W.FL plug-to-SMA-jack
+pigtail from the module's own connector to a bulkhead SMA in the enclosure
+wall, with the antenna screwing onto that. hardware/bom.md REV 0.6 carries
+all three as Board 2 items 13–15, with the connector and pigtail marked as
+enclosure/cable parts rather than parts that get placed on this PCB — and
+with the antenna itself, which REV 0.5 never listed at all.
+
+This removes the largest item from "What's not done yet" rather than
+solving it: there is no controlled-impedance net on this board, no antenna
+keepout to observe (datasheet Figure 3-1 Note A: the keepout zone applies
+to the PCB-antenna `-1` variant, "the latter has no antenna keepout zone"),
+and no RF corridor for via placement to respect. The antenna requirements
+move to the cable and the case: 2.4GHz, 50Ω, and **maximum gain 2.33 dBi**,
+which is the gain of the antenna Espressif certified the module with —
+exceed it and the module's existing test reports no longer cover the
+product (datasheet section 10.2).
+
+The stitching grid was one column of nine vias
+------------------------------------------------
+
+"Ground pours" below describes a 5mm grid of stitching vias placed
+"wherever one fits clear of every courtyard, pad and trace". Counting them
+on the finished board: **nine, all at x = 1.1mm, running down the left edge
+from y = 1.1 to y = 41.1**, then stopping. Nothing else on the board.
+
+The cause is one line of `add_stitching_vias`:
+
+```python
+if any(bb.Inflate(clear).Contains(pt) for bb in courtyards):
+```
+
+`BOX2I.Inflate()` is not a pure function. It grows the box **in place** and
+returns *itself*, so every candidate point that reached a given box grew
+that box by another 0.6mm before testing it. `any()` short-circuits, so
+the boxes early in the list grew fastest, and after a few dozen candidates
+the first courtyards it tests cover the entire board and reject everything.
+The scan walks x-then-y, which is why the survivors are one partial column
+at the start of the walk.
+
+Nothing downstream could catch this. DRC does not know how many vias were
+*meant* to be there, and a board with too few stitching vias is
+electrically legal — just a two-layer board whose return plane is tied to
+its other half only along one edge. The pour that a signal on the right
+side of the board returns through had to reach the left edge to change
+layers.
+
+The fix inflates each box once, up front, outside the candidate loop:
+
+```python
+keepouts = [box for _ref, box in courtyard_boxes(board)]
+keepouts += [pad.GetBoundingBox() for fp in board.GetFootprints() for pad in fp.Pads()]
+for box in keepouts:
+    box.Inflate(clear)
+```
+
+| | before | after |
+|---|---|---|
+| GND vias on the board | 22 | 180 |
+| of those, on the stitch grid | 9 | 167 |
+| worst-case distance from any board point to a GND via | 55.1mm | 16.8mm |
+
+Verified after the fact, since the whole point is that DRC cannot see it:
+no stitching via lands inside any footprint's courtyard, and DRC stays at
+0 violations / 0 unconnected with 158 more vias on the board.
+
+The remaining 16.8mm worst case is at (18, 58), under the display and
+keyboard-controller headers' courtyards, where the grid legitimately has
+nowhere to put one. The usual rule of thumb is to stitch at λ/20 for the
+fastest edge present. This board's fastest are the SPI buses and USB
+full-speed; a 2ns edge puts the knee at 0.5/t_r = 250MHz, and at
+v_p = c/√4.3 = 1.45e8 m/s in FR-4 that is λ = 579mm, so λ/20 = 29mm.
+16.8mm is inside that. 55.1mm was not. Tightening `STITCH_PITCH` below
+5mm would not improve the worst case, which is set by the headers'
+footprints, not by the pitch.
 
 Reference-designator drift
 ---------------------------
@@ -185,8 +324,12 @@ ordinary routed trace. Both copper layers now carry a GND zone inset
   of stopping short and stranding copper.
 - **Vias**: the 3x3 array under `U9`'s thermal pad (pin 49), which is
   what Espressif's hardware design guidelines actually ask for, plus a
-  9mm grid of stitching vias wherever one fits clear of every courtyard,
-  pad and trace.
+  5mm grid of stitching vias (`STITCH_PITCH`) wherever one fits clear of
+  every courtyard, pad and trace — 167 of them. Earlier revisions of this
+  file said "9mm grid", which matched neither the constant nor the board:
+  what was actually placed was nine vias in a single column, and only the
+  count made that visible. See "The stitching grid was one column of nine
+  vias".
 
 Two ordering constraints, both learned the hard way:
 
@@ -454,11 +597,12 @@ kicad-cli sch export svg main-board.kicad_sch -o /tmp/render/
 
 Current ERC result (after the datasheet-verification pin fixes, the
 IP5306 inductor addition, the real ESP32-C3-MINI-1U footprint, and
-grounding its remaining GND pads above): **377 violations, 0 errors.**
+grounding its remaining GND pads above, and removing the antenna
+connectors): **368 violations, 0 errors.**
 All remaining warnings are benign / expected in a headless-generated
 schematic without a full project sym-lib-table registered:
 
-- `endpoint_off_grid` (362) — cosmetic, wire/pin endpoints not snapped to
+- `endpoint_off_grid` (353) — cosmetic, wire/pin endpoints not snapped to
   KiCad's visual grid
 - `lib_symbol_issues` (10) — artifact of validating without this
   environment's full symbol-library table registered
@@ -501,8 +645,16 @@ Current DRC result (routed and poured board): **0 violations, 0
 unconnected items** — clean at every severity, including the
 `drill_out_of_range` warnings that dogged earlier revisions (those
 traced to the WROOM-02U placeholder footprint's 0.2mm holes and went
-away with the real footprint). 87 nets, 809 tracks, 81 vias, both GND
-pours filled.
+away with the real footprint). 46 footprints, 86 nets, 806 tracks, 239
+vias, both GND pours filled (F.Cu 6385mm², B.Cu 6955mm²).
+
+REV 0.8's board is the REV 0.7 board minus `J7`, `J8` and the three
+`/ANT_RF` tracks, plus 158 stitching vias and a refill. That was done as
+a subtractive edit rather than a full `route.sh` run: nothing about the
+change asks the router to solve anything, and re-autorouting would have
+reshuffled all 806 tracks and — per "Routing" below — not deterministically.
+`build_schematic.py`, `build_library.py` and `build_pcb.py` were updated
+first, so a full regeneration produces the same board content.
 
 Routing
 -------
@@ -632,8 +784,9 @@ PCB placement notes
   27x24mm (not the few-mm size its schematic symbol suggests). Measure
   first, place second.
 - **Footprint anchors aren't always courtyard centers.** Pin headers are
-  anchored at pin 1, not the row's midpoint; the SMA edge-mount
-  connector's body is anchored well off to one side of its mounting pin.
+  anchored at pin 1, not the row's midpoint; the SMA edge-mount connector
+  (`J8`, since removed — see "The antenna path never touched the board")
+  had its body anchored well off to one side of its mounting pin.
   `build_pcb.py` places every footprint once, measures where its courtyard
   actually landed, and corrects the anchor so `PLACEMENT`'s coordinates
   consistently mean "courtyard center" regardless of the footprint's own
@@ -650,29 +803,25 @@ PCB placement notes
 What's not done yet
 --------------------
 
-REV 0.7 closed the two items that used to head this list — trace widths
-on the boost path, and a real ground pour stitched to the ESP32-C3's
-thermal pad. What is left:
+REV 0.8 closed the item that used to head this list — RF layout around
+the antenna path — by establishing that there is no RF net on this board
+to lay out, and re-stitching the pours that REV 0.7 only appeared to
+stitch. REV 0.7 before it closed trace widths on the boost path and the
+ground pour itself. What is left:
 
-- **RF layout around the antenna path.** `/ANT_RF` runs from `U9` to the
-  U.FL pad (`J7`) and on to the edge-mount SMA (`J8`) at whatever width
-  and routing Freerouting chose. It is a 2.4GHz net and wants a
-  controlled-impedance treatment (a coplanar-waveguide-over-ground
-  geometry computed for this stackup, a clear keepout, no via stubs),
-  none of which the autorouter knows to do. This is the largest
-  remaining layout gap.
 - **Return-path continuity for the SPI/I2C buses.** The pours give every
   signal a return plane, but nothing has checked that a bus does not
   cross a slot in the pour where its return current would have to detour.
-- **A stackup and impedance decision.** Everything above assumes 1oz
-  outer copper on a standard 1.6mm FR-4 two-layer board. That has not
-  been stated anywhere as a requirement, and the trace-width table
-  depends on it.
+- **A stackup decision.** Everything above assumes 1oz outer copper on a
+  standard 1.6mm FR-4 two-layer board. That has not been stated anywhere
+  as a requirement, and the trace-width table depends on it. It is no
+  longer an *impedance* decision as well: with the antenna path gone,
+  nothing on this board is controlled-impedance, so the stackup only has
+  to satisfy the IPC-2221 current widths and the fab's minimums.
 - **A human eye on the autorouted result before fab.** DRC-clean and
   netclass-correct is not the same as well laid out. The specific things
-  a review should look at: via placement relative to the antenna path,
-  the density of the escape fan under `U5`, and whether the 9mm
-  stitching grid is dense enough near the RF module.
+  a review should look at: the density of the escape fan under `U5`, and
+  the 16.8mm stitching hole under the top-edge headers.
 - A second schematic sheet (and PCB) for the PLC/Power Board and PLC
   Adapter (see hardware/bom.md's Board 1 and "PLC Adapter" sections) — out
   of scope for this pass, which covers Board 2 (Main Board) only.

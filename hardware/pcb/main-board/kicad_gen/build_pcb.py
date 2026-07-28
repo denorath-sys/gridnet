@@ -229,7 +229,9 @@ def add_gnd_zones(board: "pcbnew.BOARD", gnd_net: "pcbnew.NETINFO_ITEM") -> None
 def make_via(board: "pcbnew.BOARD", net: "pcbnew.NETINFO_ITEM", x_nm: int, y_nm: int) -> None:
     via = pcbnew.PCB_VIA(board)
     via.SetPosition(pcbnew.VECTOR2I(x_nm, y_nm))
-    via.SetWidth(mm(VIA_DIAMETER))
+    # SetFrontWidth, not the layer-less SetWidth: KiCad 9's padstack model wants
+    # a layer, and the one-argument overload trips an assertion per via.
+    via.SetFrontWidth(mm(VIA_DIAMETER))
     via.SetDrill(mm(VIA_DRILL))
     via.SetNet(net)
     via.SetLayerPair(pcbnew.F_Cu, pcbnew.B_Cu)
@@ -273,8 +275,18 @@ def add_stitching_vias(board: "pcbnew.BOARD", gnd_net: "pcbnew.NETINFO_ITEM") ->
     # One box per footprint, not one per courtyard graphic: a courtyard drawn
     # as four separate line segments has four thin bounding boxes whose union
     # is the outline only, leaving the part's whole interior looking free.
-    courtyards = [box for _ref, box in courtyard_boxes(board)]
-    pad_boxes = [pad.GetBoundingBox() for fp in board.GetFootprints() for pad in fp.Pads()]
+    #
+    # Inflated once, here, and never inside the candidate loop. BOX2I.Inflate()
+    # grows the box in place and returns *itself*, so `bb.Inflate(clear)` in the
+    # per-candidate test grew the same boxes again on every candidate that
+    # reached them: the boxes ratcheted outwards until they covered the board
+    # and every remaining site was rejected. See README.md's "The stitching
+    # grid was one column of nine vias".
+    clear = mm(VIA_DIAMETER / 2 + 0.3)
+    keepouts = [box for _ref, box in courtyard_boxes(board)]
+    keepouts += [pad.GetBoundingBox() for fp in board.GetFootprints() for pad in fp.Pads()]
+    for box in keepouts:
+        box.Inflate(clear)
 
     # Copper obstacles are tested as (start, end, half-width) segments rather
     # than bounding boxes. A diagonal track's bounding box is a poor stand-in
@@ -308,13 +320,10 @@ def add_stitching_vias(board: "pcbnew.BOARD", gnd_net: "pcbnew.NETINFO_ITEM") ->
     margin = ZONE_INSET + VIA_DIAMETER
     xs = [margin + i * STITCH_PITCH for i in range(int((BOARD_W - 2 * margin) // STITCH_PITCH) + 1)]
     ys = [margin + i * STITCH_PITCH for i in range(int((BOARD_H - 2 * margin) // STITCH_PITCH) + 1)]
-    clear = mm(VIA_DIAMETER / 2 + 0.3)
     for x in xs + [BOARD_W - margin]:
         for y in ys + [BOARD_H - margin]:
             pt = pcbnew.VECTOR2I(mm(x), mm(y))
-            if any(bb.Inflate(clear).Contains(pt) for bb in courtyards):
-                continue
-            if any(bb.Inflate(clear).Contains(pt) for bb in pad_boxes):
+            if any(bb.Contains(pt) for bb in keepouts):
                 continue
             if not clear_of_copper(pt, clear):
                 continue
@@ -426,11 +435,12 @@ def add_board_outline(board: "pcbnew.BOARD") -> None:
 #   - left edge: USB-C power in, battery connector
 #   - top edge: display / keyboard-controller / keyboard-backlight headers
 #     (these route up into the clamshell's lid/base)
-#   - right edge: microSD card slot, SMA antenna
+#   - right edge: microSD card slot
 #   - bottom edge: speaker header
 #   - center: MCU with crystal/reset/boot/SWD around it
 #   - center-right: SPI flash/SRAM + RTC (near the MCU's SPI1/I2C1 pins)
-#   - lower-right: ESP32-C3 module + U.FL, near the SMA antenna path
+#   - lower-right: ESP32-C3 module (its antenna leaves on a cable from the
+#     module's own jack, so no antenna connector is placed on the board)
 #   - lower-center: audio amp + keyboard-backlight FET, near the speaker
 #     and keyboard-backlight headers they feed
 # ---------------------------------------------------------------------- #
@@ -503,8 +513,9 @@ PLACEMENT: Dict[str, Tuple[float, float, float, str]] = {
     "U9": (69.14, 22.73, 0, "ESP32-C3-MINI-1U"),  # ESP32-C3-MINI-1U module
     "R11": (81.91, 22.73, 0, "10k"),         # EN pull-up
     "R12": (86.42, 22.73, 0, "10k"),         # IO9/BOOT pull-up
-    "J8": (94.0, 22.73, 90, "SMA_EDGE"),     # SMA, right edge (near the ESP32/U.FL path)
-    "J7": (80.0, 35.53, 0, "U.FL"),          # U.FL (on-module antenna pad, close to module)
+    # No antenna connector is placed. J7 (U.FL) and J8 (edge-mount SMA) used to
+    # sit at (80, 35.53) and (94, 22.73); the ESP32-C3-MINI-1U's radio never
+    # reaches board copper, so neither had anything to carry -- see README.md.
     "U6": (75.52, 42.48, 0, "W25Q64JVSSIQ"),  # W25Q64 flash
     "U7": (85.42, 42.48, 0, "23LC1024"),     # 23LC1024 SRAM
     "U8": (68.19, 53.77, 0, "DS3231M"),      # DS3231M RTC

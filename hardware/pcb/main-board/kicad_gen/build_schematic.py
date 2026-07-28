@@ -268,7 +268,15 @@ def build() -> Schematic:
     sch.net(rtc, "14", "VBAT_RTC")
 
     # ------------------------------------------------------------------ #
-    # Wireless: ESP32-C3-MINI-1U (USART1: PA9=TX, PA10=RX), U.FL -> SMA
+    # Wireless: ESP32-C3-MINI-1U (USART1: PA9=TX, PA10=RX)
+    #
+    # No antenna connector, no RF net and no RF trace on this board -- see
+    # README.md's "The antenna path never touched the board". The -1U's radio
+    # leaves the module through the antenna jack mounted on the module itself
+    # (datasheet v2.2 Table 3-1: pins 1, 2, 11, 14 and 36-53 are all GND;
+    # there is no ANT or RF pad anywhere in the pin list), so the antenna is a
+    # cable assembly from that jack to a bulkhead connector in the case, not
+    # copper. hardware/bom.md carries the pigtail and the antenna.
     # ------------------------------------------------------------------ #
 
     esp = sch.place("gridnet_parts:ESP32-C3-MINI-1U", "U", "ESP32-C3-MINI-1U", 350, 60, ref="U9")
@@ -297,23 +305,10 @@ def build() -> Schematic:
     sch.net(esp, "26", "USB_DN")  # IO18/USB_D-
     sch.net(esp, "27", "USB_DP")  # IO19/USB_D+
 
-    # U.FL pad on the ESP32-C3-MINI-1U module itself
-    ufl = sch.place(
-        "Connector:Conn_Coaxial_Small", "J", "U.FL", 350, 90,
-        footprint_override="Connector_Coaxial:U.FL_Molex_MCRF_73412-0110_Vertical",
-        ref="J7",
-    )
-    sch.net(esp, "ANT", "ANT_RF")
-    sch.net(ufl, "1", "ANT_RF")
-    sch.power_pin(ufl, "2", "GND")
-    # Board-edge SMA, reached via a U.FL-to-SMA pigtail from the module's U.FL pad
-    pigtail_sma = sch.place(
-        "Connector:Conn_Coaxial", "J", "SMA_EDGE", 350, 105,
-        footprint_override="Connector_Coaxial:SMA_Amphenol_132289_EdgeMount",
-        ref="J8",
-    )
-    sch.net(pigtail_sma, "1", "ANT_RF")
-    sch.power_pin(pigtail_sma, "2", "GND")
+    # J7 (a second, board-mounted U.FL) and J8 (an edge-mount SMA) used to sit
+    # here, wired to each other through an /ANT_RF net. Both are gone: J7
+    # duplicated a connector the module already carries, and nothing could
+    # have driven the trace to J8 -- see README.md.
 
     # ------------------------------------------------------------------ #
     # Off-board connectors: display (SPI2), keyboard controller (USART2),

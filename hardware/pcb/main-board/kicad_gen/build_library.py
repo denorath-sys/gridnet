@@ -156,7 +156,7 @@ def main() -> None:
             # numbers, pad 49 (GND) as the expected 3x3 thermal-pad array,
             # matching Table 3-1 of the datasheet used for the pin list below.
             footprint="gridnet_footprints:ESP32-C3-MINI-1U",
-            description="Espressif Wi-Fi/BLE module, U.FL antenna variant -- pin functions AND pad numbers verified against the real Espressif ESP32-C3-MINI-1/1U datasheet (v2.2) Table 3-1; every GND pad (including the pin-49 thermal-pad array) and every real signal pad is now drawn -- only the 14 true NC pads (4,7,9,10,15,17,24,25,28,29,32-35) are omitted. Footprint is the real MINI-1U footprint (see comment above), not a placeholder.",
+            description="Espressif Wi-Fi/BLE module, external-antenna variant (the antenna jack is on the module; the module exposes no RF pad) -- pin functions AND pad numbers verified against the real Espressif ESP32-C3-MINI-1/1U datasheet (v2.2) Table 3-1; every GND pad (including the pin-49 thermal-pad array) and every real signal pad is now drawn -- only the 14 true NC pads (4,7,9,10,15,17,24,25,28,29,32-35) are omitted. Footprint is the real MINI-1U footprint (see comment above), not a placeholder.",
             datasheet="https://documentation.espressif.com/esp32-c3-mini-1_datasheet_en.pdf",
             verified=True,
             pins=[
@@ -179,7 +179,14 @@ def main() -> None:
                 Pin("27", "IO19/USB_D+", "bidi", "right"),
                 Pin("30", "U0RXD", "in", "right"),
                 Pin("31", "U0TXD", "out", "right"),
-                Pin("ANT", "ANT", "pas", "right"),  # U.FL connector -- not a numbered castellated pad
+                # There is deliberately no ANT pin here. An earlier revision
+                # invented one (pin *number* "ANT", which matches no pad in the
+                # footprint) so the schematic could wire the radio to a
+                # board-mounted connector. Table 3-1 lists 53 pads and no RF
+                # pad among them: 1, 2, 11, 14 and 36-53 are GND, the rest are
+                # 3V3, EN and IO. The radio only leaves through the antenna
+                # jack on the module -- see hardware/pcb/main-board/README.md's
+                # "The antenna path never touched the board".
                 # Remaining GND pads (Table 3-1: "1, 2, 11, 14, 36-53"), added
                 # so every real ground pad gets grounded, not just 1/2 -- see
                 # hardware/pcb/main-board/README.md's "Real ESP32-C3-MINI-1U

@@ -99,10 +99,11 @@ def main() -> None:
             # Real footprint, vendored from Espressif's official KiCad
             # library into ../gridnet_footprints.pretty/ -- see that
             # directory's README.md. Same 53-pad numbering as the Main
-            # Board's ESP32-C3-MINI-1U (same datasheet, Table 3-1); this
-            # plain variant has no U.FL pad since its antenna is on-module.
+            # Board's ESP32-C3-MINI-1U (same datasheet, Table 3-1). Neither
+            # variant has an RF pad; this one's antenna is on the module,
+            # the -1U's is an on-module W.FL/MHF III jack.
             footprint="gridnet_footprints:ESP32-C3-MINI-1",
-            description="Espressif Wi-Fi/BLE module, on-module PCB antenna variant (no external antenna needed) -- pin functions AND pad numbers verified against the real Espressif ESP32-C3-MINI-1/1U datasheet (v2.2) Table 3-1, same pin list as the Main Board's MINI-1U symbol minus the U.FL-only ANT pad",
+            description="Espressif Wi-Fi/BLE module, on-module PCB antenna variant (no external antenna needed) -- pin functions AND pad numbers verified against the real Espressif ESP32-C3-MINI-1/1U datasheet (v2.2) Table 3-1, same pin list as the Main Board's MINI-1U symbol -- neither module brings its radio out to a pad",
             datasheet="https://documentation.espressif.com/esp32-c3-mini-1_datasheet_en.pdf",
             verified=True,
             pins=[

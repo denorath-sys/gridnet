@@ -158,7 +158,7 @@ What *is* built and ERC-clean:
   and the complete power/ground scheme from the datasheet's own Figure 8
   (supply structure) and Figure 9 (ground scheme) — reproduced exactly,
   not approximated.
-- ESP32-C3-MINI-1 (on-module PCB antenna, no U.FL): Wi-Fi AP, UART host
+- ESP32-C3-MINI-1 (on-module PCB antenna, no antenna connector): Wi-Fi AP, UART host
   for the ST7580, a UART0 programming header (without this or a USB
   connector there'd be no way to flash the module at all — an omission
   this pass caught and fixed, not something any existing doc specified).
@@ -185,9 +185,14 @@ standard as the Main Board's parts:
   the Main Board's parts were.
 - **ESP32-C3-MINI-1** — same datasheet and Table 3-1 already used to
   verify the Main Board's ESP32-C3-MINI-1U, since both modules share one
-  datasheet and pin table. Pin list is identical to that symbol minus
-  the U.FL-only `ANT` pad (this variant has an on-module antenna, no
-  external antenna connector).
+  datasheet and pin table. Pin list is identical to that symbol, full
+  stop: Table 3-1's 53 pads are the same for both variants and neither
+  has an RF pad. This symbol has no `ANT` pin, and neither does the Main
+  Board's any more — the one it used to have was invented, and the pad it
+  claimed to name does not exist on either module (see
+  ../main-board/README.md's "The antenna path never touched the board").
+  The difference between the variants is only where the radio goes: an
+  on-module PCB antenna here, an on-module W.FL/MHF III jack on the -1U.
 - **Footprints**: ST7580 uses a bundled KiCad `QFN-48-1EP_7x7mm_P0.5mm`
   footprint sized to the datasheet's Table 14 exposed-pad dimensions
   (5.1×5.1mm typ., closest bundled option). ESP32-C3-MINI-1 uses the
@@ -208,9 +213,13 @@ ERC result
 kicad-cli sch erc plc-board.kicad_sch --format json -o /tmp/erc.json
 ```
 
-**212 violations, 0 errors.** Same benign categories as the Main Board's
-ERC results, for the same reasons (see that board's README for detail):
-`endpoint_off_grid` (209, cosmetic), `lib_symbol_issues` (2) and
+**296 violations, 0 errors.** (This file said 212 through the REV 0.2
+pass that took the board from 29 to 47 components; the count was never
+re-run afterwards. The categories and the reasoning below were unchanged
+by it — only the off-grid endpoint count grew, one per new pin.) Same
+benign categories as the Main Board's ERC results, for the same reasons
+(see that board's README for detail): `endpoint_off_grid` (293,
+cosmetic), `lib_symbol_issues` (2) and
 `footprint_link_issues` (1) (this headless environment doesn't have
 `gridnet_parts`/`gridnet_footprints` registered as project libraries;
 both load and place correctly regardless).
