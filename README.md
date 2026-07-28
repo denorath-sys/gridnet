@@ -219,12 +219,12 @@ GRIDNET puts a low-voltage signal on the mains through a transformer. It does no
 | PLC Adapter power architecture ([`docs/plc-adapter-power.md`](docs/plc-adapter-power.md)) | ✅ Complete — adapter runs off the Terminal's battery during an outage; the 24V inverter and its master-election protocol were removed (never able to run, and outside EN 50065-1) |
 | Protection circuit topology (TVS + MOV + relay) | ✅ Complete — topology and parts selected ([`hardware/bom.md`](hardware/bom.md)); not yet a drawn schematic |
 | Main Board schematic + PCB layout ([`hardware/pcb/main-board`](hardware/pcb/main-board)) | ✅ Complete — custom parts datasheet-verified, PCB placed, routed, ground-poured on both layers, DRC clean (0 violations, 0 unconnected). REV 0.7 was a pre-fab design review that caught a refdes-drift bug placing parts in each other's positions (crystal load caps 51mm from the crystal), a boost-converter switching loop spread across 63mm, and every trace at 0.2mm including a 2.4A path. REV 0.8 found the antenna path was fiction — a phantom U.FL duplicating the module's own jack, a trace nothing could drive, and an invented `ANT` symbol pin — and that the "grid of stitching vias" was nine vias in one column, because `BOX2I.Inflate()` mutates in place (now 167, worst-case return path 55mm → 16.8mm) — see that directory's README |
-| PLC/Power Board (BOM's Board 1, the PLC Adapter's PCB — see [`hardware/pcb/plc-board`](hardware/pcb/plc-board)) | 🔄 REV 0.2, ERC-clean. Power architecture now complete: Terminal USB-C inlet, Schottky ORing, supercapacitor hold-up, 5V→12V boost feeding the ST7580's `VCC`, and its hardware transmit-current limit. One gap left — the PA output network and coupling transformer, which need ST's AN4068 reference circuit rather than a guess. No PCB layout yet. |
+| PLC/Power Board (BOM's Board 1, the PLC Adapter's PCB — see [`hardware/pcb/plc-board`](hardware/pcb/plc-board)) | ✅ REV 0.3 schematic complete, ERC-clean (350 warnings, 0 errors). Power architecture: Terminal USB-C inlet, Schottky ORing, supercapacitor hold-up, 5V→12V boost feeding the ST7580's `VCC`, hardware transmit-current limit. Line coupling now built too — transmit active filter around the ST7580's own PA, receive resonant filter, and the coupling transformer into the mains. Topology from ST's AN4068, values rescaled from its A-band reference design to GRIDNET's 95–140 kHz band ([`docs/plc-coupling.md`](docs/plc-coupling.md)). No PCB layout yet — nothing blocks it now. |
 | Case design (CAD) | 📋 Planned — only target external dimensions exist (see Hardware Overview); no CAD model |
 | Software architecture (Zephyr + Forth VM) | ✅ Complete |
 | Electrical safety analysis | ✅ Complete |
 | Protocol & Forth VM reference prototypes ([`tools/`](tools/), Python, pre-hardware validation) | ✅ Complete |
-| **PCB fabrication / Hardware prototype** | 🔄 Next step — Main Board has been through two design-review passes and is DRC-clean. RF layout is no longer on its list: there is no RF net on the board (the antenna is a cable assembly from the module's own jack). What is left before fab is a stackup decision, a return-path review of the SPI/I2C buses, and a human eye on the autorouted copper (see [`hardware/pcb/main-board`](hardware/pcb/main-board) "What's not done yet"). Board 1 needs its PA output network and coupling transformer (blocked on ST's AN4068) before its own layout can start meaningfully |
+| **PCB fabrication / Hardware prototype** | 🔄 Next step — Main Board has been through two design-review passes and is DRC-clean. RF layout is no longer on its list: there is no RF net on the board (the antenna is a cable assembly from the module's own jack). What is left before fab is a stackup decision, a return-path review of the SPI/I2C buses, and a human eye on the autorouted copper (see [`hardware/pcb/main-board`](hardware/pcb/main-board) "What's not done yet"). Board 1's schematic is complete and its PCB layout can now start; before it is fabricated it needs mains creepage/clearance treatment the Main Board never required, and before any EN 50065-1 claim it needs a conducted-emission sweep |
 | Embedded firmware (Zephyr, on real hardware) | 📋 Planned — starts after PCB prototype |
 | Field testing | 📋 Planned |
 
@@ -246,7 +246,8 @@ gridnet/
 │   ├── protocol.md            (full protocol stack)
 │   ├── firmware-arch.md       (Zephyr + Forth VM)
 │   ├── electrical-safety.md   (CENELEC compliance)
-│   └── plc-adapter-power.md   (adapter power architecture + EN 50065 analysis)
+│   ├── plc-adapter-power.md   (adapter power architecture + EN 50065 analysis)
+│   └── plc-coupling.md        (line coupling network: AN4068 retuned for B+C)
 ├── firmware/
 │   └── README.md              (planned structure — embedded firmware not started)
 ├── tools/

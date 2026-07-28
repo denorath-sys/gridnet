@@ -3,7 +3,7 @@ Overview
 GRIDNET uses a custom lightweight protocol designed for low-bandwidth, high-latency powerline communication. Every device is both a node and a repeater.
 
 Physical Layer
-ParameterValueTechnologyPLC (Powerline Communication)ChipST7580 (STMicroelectronics)StandardCENELEC EN50065 (band under review — A-band is utility-only, see docs/electrical-safety.md)Frequency9–148 kHzModulationOFDM / FSKTypical data rate2.4–9.6 kbpsFallbackESP32-C3 Wi-Fi 2.4GHz mesh
+ParameterValueTechnologyPLC (Powerline Communication)ChipST7580 (STMicroelectronics)StandardCENELEC EN50065, bands B+C (A-band is utility-only, see docs/electrical-safety.md)Frequency95–140 kHz — the ST7580 covers 9–148 kHz, but Board 1's coupling network is tuned for B+C and changing that means changing four component values (docs/plc-coupling.md)ModulationOFDM / FSKTypical data rate2.4–9.6 kbpsFallbackESP32-C3 Wi-Fi 2.4GHz mesh
 
 Packet Format
 [AA AA AA] [55] [LEN 2B] [SRC 4B] [DST 4B] [SEQ 2B] [TYPE 1B] [PAYLOAD] [CRC16 2B]
@@ -63,10 +63,10 @@ Earlier revisions specified a 24V "inverter mode" and an inverter master electio
 
 Electrical Safety
 
-Signal level: bounded by EN 50065-1 — 5 Vrms at 9 kHz falling to 1 Vrms at 95 kHz. The ST7580's PA delivers 14 V p-p (4.95 Vrms); the adapter adds a hardware current limit as a backstop.
+Signal level: bounded by EN 50065-1. The ST7580's PA delivers 14 V p-p (4.95 Vrms); the adapter adds a hardware current limit as a backstop, set to 500 mA rms by a 270R resistor on CL.
 Nothing is injected onto the wire — GRIDNET signals, it does not energise.
 Frequency: consumer electronics naturally filter the CENELEC band
-Band allocation: A-band (9–95 kHz) is for electricity suppliers; general equipment belongs in 95–148.5 kHz. This document still says A-band above and needs updating — the largest open compliance item in the project.
+Band allocation: A-band (9–95 kHz) is for electricity suppliers; general equipment belongs in 95–148.5 kHz. GRIDNET uses B (95–125 kHz) and C (125–140 kHz) — C requires an access protocol, which is the CSMA/CA above. D (140–148.5 kHz) is reserved for alarm and security systems and is not used. The hardware now commits to this: see docs/plc-coupling.md. What remains open is the measurement — harmonic suppression is inherently tighter in B+C than in the A band, and no EN 50065-1 conformance claim is justified before a conducted-emission sweep on a prototype.
 Galvanic isolation: the ST7580 reaches the line only through the coupling transformer, and the Terminal's USB-C cable sits on the isolated secondary
 
 

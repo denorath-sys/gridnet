@@ -1,5 +1,5 @@
 GRIDNET — Bill of Materials (BOM)
-REV 0.6 — Prototype (Single Unit, Retail Pricing)
+REV 0.7 — Prototype (Single Unit, Retail Pricing)
 
 REV 0.5 note: several REV 0.4 part choices didn't hold up under review —
 either a real spec mismatch (a display resolution the driver IC can't
@@ -12,8 +12,14 @@ itself unbuildable — the wrong connector generation, a connector style that
 cannot be reached by a cable, and no antenna at all. Board 2 items 13-15
 and the totals are corrected here.
 
+REV 0.7 note: AN4068 was finally obtained, so Board 1's line coupling is no
+longer a placeholder. The coupling transformer has a real part number, and
+the rest of the coupling network is costed as items 11-13. Note that its
+values are not AN4068's — that reference design is an A-band node and this
+one is not; see docs/plc-coupling.md.
+
 Board 1 — PLC / Power Board (100×80mm)
-#ComponentPart NumberDescriptionQtyUnit Cost (USD)Total1PLC SoCST7580CENELEC EN50065, OFDM/FSK, 9–148kHz1$5.70$5.702TVS DiodeP6KE250CABidirectional, 250V — surge protection (Layer 1)1$0.60$0.603MOVS20K275275V varistor — overvoltage protection (Layer 2)1$0.40$0.404SMPS ModuleHLK-5M05230VAC → 5VDC, 1A1$3.50$3.505Boost converterMT36085V → 12V for the ST7580's VCC/PA rail, 2A switch1$0.30$0.306Boost inductor22µH, 2A saturationMT3608 switching inductor1$0.20$0.207Schottky diodesSS34Source ORing (2), supercap discharge (1), boost rectifier (1)4$0.10$0.408SupercapacitorNAT 1F 5.5VHold-up so the ESP32 can tell the Terminal mains has gone1$1.20$1.209USB-C receptacleTYPE-C-31-M-125V inlet from the Terminal's battery during an outage1$0.40$0.4010Coupling transformerWürth Elektronik WE-PLCC seriesPLC line coupling, 1:1, CENELEC A-band — confirm exact part against ST7580 application note before ordering (REV 0.4 left this unspecified)1$2.00$2.0011Connector J1—2×8 pin, 2.54mm — this board's own interface header (Schuko-plug wiring, status LEDs); "main board" here means Board 1 is the PLC Adapter's own main/only board, not a connection to Board 2 — the two products don't connect to each other, see the top-level README's Hardware Overview1$0.30$0.3012Passive components—Resistors, capacitors, ferrite beads—$1.50$1.50Board 1 Total~$16.50
+#ComponentPart NumberDescriptionQtyUnit Cost (USD)Total1PLC SoCST7580CENELEC EN50065, OFDM/FSK, 9–148kHz1$5.70$5.702TVS DiodeP6KE250CABidirectional, 250V — surge protection (Layer 1)1$0.60$0.603MOVS20K275275V varistor — overvoltage protection (Layer 2)1$0.40$0.404SMPS ModuleHLK-5M05230VAC → 5VDC, 1A1$3.50$3.505Boost converterMT36085V → 12V for the ST7580's VCC/PA rail, 2A switch1$0.30$0.306Boost inductor22µH, 2A saturationMT3608 switching inductor1$0.20$0.207Schottky diodesSS34Source ORing (2), supercap discharge (1), boost rectifier (1)4$0.10$0.408SupercapacitorNAT 1F 5.5VHold-up so the ESP32 can tell the Terminal mains has gone1$1.20$1.209USB-C receptacleTYPE-C-31-M-125V inlet from the Terminal's battery during an outage1$0.40$0.4010Coupling transformerWürth Elektronik 750510231PLC line coupling, 1:1 ±1%, 1mH, leakage ≤1µH, 30pF interwinding — the exact part AN4068 names (alternate: TDK SRW13EP-X05H002). REV 0.5 carried "WE-PLCC series, confirm against the application note"; that note has now been read, and every AN4068 Table 4 line is met except withstanding voltage, where Würth quotes 2000VAC/1s against Table 4's ≥4kV impulse figure — confirm with Würth before ordering (docs/plc-coupling.md)1$2.00$2.0011Coupling inductor12µH, ≥2A saturation, ≤0.1Ω DCRSeries element of the line coupling resonance with item 12; the saturation and DCR figures are AN4068's own selection criteria, not preferences — insertion loss and distortion into a heavily loaded line depend on them1$0.30$0.3012X1 safety capacitor150nF X1 MKP, p=15mmSeries coupling into the live conductor. X1 grade is a safety requirement, not a filter one: this part sits between the board's analog ground and 230V1$0.60$0.6013Coupling passives150µH + 12nF (Rx resonance), 10µF/50V X5R (DC block), 68pF/1nF C0G + 5.1k/22k/33k/10k/1k/150R (Tx active filter)The rest of the line coupling — values rescaled from AN4068's A-band reference design to GRIDNET's 95–140kHz band, see docs/plc-coupling.md1 set$0.80$0.8014Connector J1—2×8 pin, 2.54mm — this board's own interface header (Schuko-plug wiring, status LEDs); "main board" here means Board 1 is the PLC Adapter's own main/only board, not a connection to Board 2 — the two products don't connect to each other, see the top-level README's Hardware Overview1$0.30$0.3015Passive components—Resistors, capacitors, ferrite beads—$1.50$1.50Board 1 Total~$18.20
 
 Board 2 — Main Board (100×80mm)
 #ComponentPart NumberDescriptionQtyUnit Cost (USD)Total1MCUGD32VF103CCT6RISC-V, 108MHz, 32KB RAM, 256KB Flash — same 48-pin package/pinout as REV 0.4's CBT6, next density step up (REV 0.4's README claimed 1MB Flash, which no GD32VF103 variant actually offers; 256KB is the real ceiling in this pin-compatible family)1$1.80$1.802Wi-Fi / BT ModuleESP32-C3-MINI-1UWi-Fi 2.4GHz mesh + Bluetooth 5.0 LE — "U" variant, has the on-module external-antenna jack REV 0.4's plain MINI-1 lacks (see items 13-14). That jack is the module's only RF output: datasheet v2.2 Table 3-1 gives the module 53 pads and none of them is an RF pad1$0.80$0.803SRAM23LC10241Mb SPI SRAM1$1.20$1.204FlashW25Q64JVSSIQ8MB SPI NOR Flash1$0.60$0.605RTCDS3231SNI2C RTC, ±2ppm accuracy1$1.80$1.806RTC BatteryCR20323V coin cell1$0.30$0.307LiPo chargerMCP73831Single-cell LiPo charge controller1$0.50$0.508Boost converterIP53065V boost + battery management1$0.60$0.609LDOAMS1117-3.33.3V LDO regulator2$0.15$0.3010AmplifierPAM84033W class-D audio amplifier1$0.40$0.4011microSD socket—SPI, push-push type1$0.50$0.5012USB-C connector—Power input, DFU firmware update1$0.40$0.4013SMA jack, bulkhead—Antenna port through the enclosure wall. Not a PCB part: an edge-mount SMA soldered to the board cannot be fed by a pigtail, because its centre pin is a board pad. REV 0.5 specified the edge-mount version and it was placed on the PCB as J8; see hardware/pcb/main-board/README.md1$0.80$0.8014Antenna pigtail, MHF III (W.FL / AMC) plug to SMA~100mm, from item 2's on-module jack to item 13. Not U.FL: datasheet section 10.2 specifies the third-generation connector (2.05×1.7×1.40mm, compatible with Hirose W.FL, I-PEX MHF III, Amphenol AMC), and a U.FL/MHF I plug does not mate with it1$0.60$0.60152.4GHz antenna—SMA male, ≤2.33 dBi, 50Ω. The gain ceiling is not a preference: 2.33 dBi is the antenna Espressif certified the module with, and exceeding it puts the product outside the module's existing test reports (datasheet section 10.2). Missing from REV 0.5 entirely — the BOM had the connector and the cable but no antenna1$1.20$1.2016Crystal8MHz HC49/SMD + 2×20pF load capsGD32VF103 HSE clock reference1$0.15$0.1517Passive components—Resistors, capacitors, inductors—$1.50$1.50Board 2 Total~$13.45
@@ -34,11 +40,11 @@ PCB Manufacturing (JLCPCB, 5 units each)
 BoardSizeLayersQtyCostPLC / Power Board100×80mm25 pcs~$8.00Main Board100×80mm25 pcs~$8.00Adapter Board70×60mm25 pcs~$5.00PCB Total~$21.00
 
 Cost Summary
-ModuleCost (USD)Board 1 — PLC / Power~$16.50Board 2 — Main Board~$13.45Display & Input~$50.70Power System~$10.70Enclosure~$21.50PLC Adapter~$19.10PCB Manufacturing~$21.00TOTAL (single prototype)~$152.95
+ModuleCost (USD)Board 1 — PLC / Power~$18.20Board 2 — Main Board~$13.45Display & Input~$50.70Power System~$10.70Enclosure~$21.50PLC Adapter~$19.10PCB Manufacturing~$21.00TOTAL (single prototype)~$154.65
 
 REV 0.4 totaled ~$135.80 (and the top-level README separately claimed
 ~$112). Neither figure survives this revision — the corrected total is
-~$152.95, about $17.15 higher, almost entirely from the display module
+~$154.65, about $18.85 higher, almost entirely from the display module
 (+$14.00: REV 0.4's number was for a bare ILI9488 panel that couldn't
 actually produce the specced resolution, not a real like-for-like part).
 
@@ -138,4 +144,4 @@ named component family for the PLC coupling transformer (was a bare "—"
 with no part reference at all — still needs confirming against ST7580's
 application note before ordering, this isn't a fully closed item).
 
-Last updated: 2026 — REV 0.6
+Last updated: 2026 — REV 0.7

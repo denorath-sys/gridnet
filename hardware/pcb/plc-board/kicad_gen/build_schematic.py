@@ -451,22 +451,155 @@ def build() -> Schematic:
     sch.net(rcl, "1", "ST_CL")
     sch.net(rcl, "2", "ST_VSSA")
 
-    # PA output network and line coupling: still deliberately out of scope.
-    # What used to block this was four open questions (no VCC rail, no gate
-    # driver, no inverter topology, no transformer). Three are now answered
-    # -- VCC exists and the inverter is gone, see docs/plc-adapter-power.md.
-    # What remains is one specific missing document: ST's AN4068 has the
-    # reference coupling circuit and the datasheet does not reproduce it, so
-    # the PA output network, the series coupling capacitor and the RX_IN path
-    # are still unspecified by any primary source available here. Marked
-    # no_connect rather than guessed at, same standard as before.
+    # ------------------------------------------------------------------ #
+    # Line coupling: TX active filter, RX passive filter, and the coupling
+    # to the mains. Topology is AN4068's (ST7580 design guide, DocID022923
+    # Rev 2, section 7.1); the values are NOT, because that reference design
+    # is a CENELEC A-band node and GRIDNET is not -- see docs/plc-coupling.md
+    # for the retuning and every number below.
+    #
+    # In short: A-band equipment is utility-only (docs/electrical-safety.md),
+    # so this design sits in B+C, 95-140 kHz. AN4068's filters are centred on
+    # 80-86 kHz, which puts our whole band on their skirt. Each resonance is
+    # rescaled to ~117 kHz keeping AN4068's own Q and its own ratios between
+    # corner frequency and band edge. Every resistor keeps its reference
+    # value; only the reactive parts move.
+    # ------------------------------------------------------------------ #
+
+    # -- Transmission active filter (AN4068 7.1.1) ----------------------- #
+    # Stage 1, an R-C low pass on TX_OUT to take the first bite out of the
+    # DAC's harmonics. C22 stays 1nF: AN4068 says that value was chosen as
+    # the largest that does not load TX_OUT into distortion, which is a
+    # property of the pin, not of the band. So the corner moves via R alone:
+    # 1k * 1nF -> 159 kHz (AN4068: 1.5k, 106 kHz, 1.12x its band edge; ours
+    # is 1.14x of 140 kHz).
+    tx_r = sch.place("Device:R", "R", "1k", 250, 160, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R15")
+    tx_c = sch.place("Device:C", "C", "1nF C0G", 265, 170, footprint_override="Capacitor_SMD:C_0603_1608Metric", ref="C12")
+    sch.net(st, "20", "ST_TX_OUT")
+    sch.net(tx_r, "1", "ST_TX_OUT")
+    sch.net(tx_r, "2", "ST_TX_FILT")
+    sch.net(tx_c, "1", "ST_TX_FILT")
+    sch.net(tx_c, "2", "ST_VSSA")
+
+    # Stage 2-3, a Sallen-Key 2-pole cell built around the ST7580's own power
+    # amplifier -- the datasheet exposes PA_IN+/PA_IN-/PA_OUT precisely so
+    # the filter can be wrapped around it (section 5.3).
+    #
+    #   fC = 1 / (2*pi*sqrt(R16*R17*C13*C14)) = 221 kHz
+    #   Q  = sqrt(R16*R17*C13*C14) / (R17*C14 + R16*C14 + R16*C13*(1-A0)) = 1.03
+    #   A0 = 1 + R18/R19 = 1 + 33k/10k = 4.3 = 12.7 dB
+    #
+    # Both AN4068 formulas reproduce its own stated 150 kHz / Q=1.03 / 4.3
+    # with its own values, which is what makes them safe to rescale. Q and
+    # gain are invariant under scaling both caps together, so only the caps
+    # change: 100pF -> 68pF moves fC by sqrt(2.15) to 221 kHz, holding
+    # AN4068's 1.58x ratio between corner and band edge (150/95 = 221/140).
+    sk_r1 = sch.place("Device:R", "R", "5.1k", 250, 180, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R16")
+    sk_r2 = sch.place("Device:R", "R", "22k", 280, 180, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R17")
+    sk_cfb = sch.place("Device:C", "C", "68pF C0G", 265, 190, footprint_override="Capacitor_SMD:C_0603_1608Metric", ref="C13")
+    sk_cgnd = sch.place("Device:C", "C", "68pF C0G", 295, 190, footprint_override="Capacitor_SMD:C_0603_1608Metric", ref="C14")
+    gain_rfb = sch.place("Device:R", "R", "33k", 320, 175, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R18")
+    gain_rgnd = sch.place("Device:R", "R", "10k", 320, 190, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R19")
+
+    sch.net(sk_r1, "1", "ST_TX_FILT")
+    sch.net(sk_r1, "2", "ST_PA_SK")     # R16/R17 junction, the feedback node
+    sch.net(sk_cfb, "1", "ST_PA_SK")
+    sch.net(sk_cfb, "2", "ST_PA_OUT")   # feedback capacitor, around the PA
+    sch.net(sk_r2, "1", "ST_PA_SK")
+    sch.net(sk_r2, "2", "ST_PA_IN_P")
+    sch.net(sk_cgnd, "1", "ST_PA_IN_P")
+    sch.net(sk_cgnd, "2", "ST_VSSA")
+    sch.net(st, "21", "ST_PA_IN_P")     # PA_IN+
+    sch.net(st, "22", "ST_PA_IN_N")     # PA_IN-
+    sch.net(st, "26", "ST_PA_OUT")
+    sch.net(gain_rfb, "1", "ST_PA_OUT")
+    sch.net(gain_rfb, "2", "ST_PA_IN_N")
+    sch.net(gain_rgnd, "1", "ST_PA_IN_N")
+    sch.net(gain_rgnd, "2", "ST_VSSA")
+
+    # -- Line coupling (AN4068 7.1.3) ------------------------------------ #
+    # C16 blocks DC out of the transformer primary; T1 is the isolation
+    # barrier; L3 and C17 form a series resonance into the mains, and C17 is
+    # also the X1 safety capacitor standing between this board's analog
+    # ground and the live conductor.
+    #
+    #   fc' = 1 / (2*pi*sqrt((L3 + T1 leakage) * C17))
+    #       = 1 / (2*pi*sqrt(13uH * 150nF)) = 114 kHz
+    #   Q into a 5 ohm line = 2*pi*fc'*L3'/5 = 1.9  ->  -3 dB over ~61 kHz
+    #
+    # AN4068 got Q=2 / 40 kHz here for a band 86 kHz wide, so it never asked
+    # this resonance to be flat across the band. Ours is wider than the band
+    # it has to carry (45 kHz), which is the easier case.
+    dc_block = sch.place(
+        "Device:C", "C", "10uF/50V X5R", 350, 165,
+        footprint_override="Capacitor_SMD:C_1210_3225Metric", ref="C16",
+    )
+    coupling_t = sch.place("gridnet_parts:PLC_COUPLING_TRANSFORMER", "T", "750510231", 380, 175, ref="T1")
+    line_l = sch.place(
+        "Device:L", "L", "12uH", 410, 165,
+        footprint_override="Inductor_SMD:L_7.3x7.3_H4.5", ref="L3",
+    )
+    line_c = sch.place(
+        "Device:C", "C", "150nF X1", 435, 165,
+        footprint_override="Capacitor_THT:C_Rect_L16.5mm_W5.0mm_P15.00mm_MKT", ref="C17",
+    )
+    sch.net(dc_block, "1", "ST_PA_OUT")
+    sch.net(dc_block, "2", "PLC_COUPLING")
+    sch.net(coupling_t, "1", "PLC_COUPLING")   # primary 1-4
+    sch.net(coupling_t, "4", "ST_VSSA")
+    sch.net(coupling_t, "10", "PLC_LINE")      # secondary 10-7
+    sch.net(line_l, "1", "PLC_LINE")
+    sch.net(line_l, "2", "PLC_LINE_X1")
+    sch.net(line_c, "1", "PLC_LINE_X1")
+    sch.net(line_c, "2", "AC_L")
+    sch.net(coupling_t, "7", "AC_N")
+
+    # -- Reception passive filter (AN4068 7.1.2) ------------------------- #
+    # A series resistor into a parallel L-C to analog ground: high impedance
+    # at resonance, so it passes the band and shunts everything else.
+    #
+    #   fc = 1 / (2*pi*sqrt(L2*C15)) = 118.6 kHz
+    #   Q  = w*R20*L2*C15 / (R20*RL*C15 + L2) = 1.31   (RL ~ 2 ohm, the
+    #        inductor's own DC resistance -- AN4068 is explicit that RL, not
+    #        just R20, sets the selectivity)
+    #   -> -3 dB bandwidth ~90 kHz, so 95-140 kHz sits inside it with margin.
+    #
+    # R20 keeps AN4068's 150R: solving Q and fc together for the new centre
+    # lands on 150R with a 12nF/150uH pair, which is the E-series-friendly
+    # solution and one fewer part to justify.
+    #
+    # No DC blocking capacitor here, and none in AN4068 either: RX_IN's
+    # absolute maximum range is -(VCCA+0.3) to VCC+0.3 (datasheet section
+    # 3.1), i.e. it expects a signal that swings below ground, so the pin is
+    # meant to sit at 0 V DC. The transformer primary would ground it anyway.
+    rx_r = sch.place("Device:R", "R", "150R", 350, 195, footprint_override="Resistor_SMD:R_0603_1608Metric", ref="R20")
+    rx_l = sch.place("Device:L", "L", "150uH", 370, 205, footprint_override="Inductor_SMD:L_1210_3225Metric", ref="L2")
+    rx_c = sch.place("Device:C", "C", "12nF", 390, 205, footprint_override="Capacitor_SMD:C_0603_1608Metric", ref="C15")
+    sch.net(rx_r, "1", "PLC_COUPLING")
+    sch.net(rx_r, "2", "ST_RX_IN")
+    sch.net(st, "19", "ST_RX_IN")
+    sch.net(rx_l, "1", "ST_RX_IN")
+    sch.net(rx_l, "2", "ST_VSSA")
+    sch.net(rx_c, "1", "ST_RX_IN")
+    sch.net(rx_c, "2", "ST_VSSA")
+
+    # -- Deliberately not built -------------------------------------------#
+    # ZC_IN, the mains zero-crossing input. AN4068 7.1.4 has a full isolated
+    # circuit for it (four 56k 2512 resistors, an LL4148, a TLP781) and
+    # docs/plc-coupling.md records it, but nothing in this project asks for
+    # it: the datasheet calls zero-crossing detection optional (section 5.6),
+    # docs/protocol.md defines no mains-synchronous behaviour, and the one
+    # scenario this product exists for is the one where there is no mains to
+    # synchronise to. Five parts and a second mains-referenced creepage path
+    # for a feature no specification requires. Cheap to add later if the PHY
+    # turns out to want it -- it is a self-contained block.
     #
     # CL_SEL would switch RCL between FSK and PSK, whose crest factors
     # differ. Not used here -- one fixed resistor means the effective RMS
     # ceiling differs slightly between modulations, acceptable for a
     # backstop. It is a digital output, so leaving it open is safe.
-    for p in ("18", "19", "20", "21", "22", "26", "36"):
-        sch.no_connect(st, p)  # ZC_IN, RX_IN, TX_OUT, PA_IN+/-, PA_OUT, CL_SEL
+    for p in ("18", "36"):
+        sch.no_connect(st, p)  # ZC_IN, CL_SEL
 
     return sch
 
