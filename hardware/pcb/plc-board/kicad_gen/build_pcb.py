@@ -85,6 +85,37 @@ BOARD_H = 80.0
 # If a higher class is ever needed, the escalation is a routed slot down the
 # middle of the band, which lengthens creepage without needing more board.
 # ---------------------------------------------------------------------- #
+# ---------------------------------------------------------------------- #
+# Stackup.
+#
+# Four layers, and not for signal density: this board could very nearly be
+# routed on two. It is four because of what has to be *planed*.
+#
+# The ST7580 puts nine +5V pads on three edges of a 48-pin 0.5mm-pitch
+# package. Nothing passes between adjacent pads there -- a 0.2mm track with
+# 0.2mm clearance needs 0.6mm and the gap is 0.25mm -- so every pin escapes
+# radially and those nine have to find each other around the outside of the
+# others. Four full two-layer routing runs failed on exactly that, never on
+# the same pad twice: (52.05,6.70), (59.45,11.25), (59.45,8.25), and the
+# pin 3 / pin 48 pair that wraps the top-left corner. A fifth run with a
+# filled +5V island on F.Cu routed cleanly and was then broken by its own
+# ground pour, which chopped the island from 413mm2 to 109mm2 and stranded
+# eight connections. That net wants a plane, and on two layers both are spoken
+# for by ground.
+#
+#   L1  F.Cu    signals, all components
+#   L2  In1.Cu  GND plane
+#   L3  In2.Cu  +5V plane
+#   L4  B.Cu    signals
+#
+# The barrier goes through all four. An inner plane that crossed it would
+# bridge mains to SELV inside the laminate, where no inspection would ever
+# find it -- which is why add_keepout_zones() and the plane outlines below
+# both take their limits from the same two constants everything else does.
+COPPER_LAYERS = 4
+SIGNAL_LAYERS = (pcbnew.F_Cu, pcbnew.B_Cu)
+PLANES = (("GND", pcbnew.In1_Cu), ("+5V", pcbnew.In2_Cu))
+
 BARRIER_X = 30.0
 HALF_GAP = 3.98
 MAINS_MAX = BARRIER_X - HALF_GAP   # 26.02 -- mains copper must end here
@@ -264,6 +295,110 @@ def add_gnd_zones(board: "pcbnew.BOARD", gnd_net: "pcbnew.NETINFO_ITEM") -> None
         board.Add(zone)
 
 
+ALL_COPPER = (pcbnew.F_Cu, pcbnew.In1_Cu, pcbnew.In2_Cu, pcbnew.B_Cu)
+
+
+def add_plane_zones(board: "pcbnew.BOARD", nets: Dict[str, "pcbnew.NETINFO_ITEM"]) -> int:
+    """Pour the two inner planes, isolated side only.
+
+    These go in at PLACEMENT time, before the DSN export, and that ordering is
+    deliberate in the opposite direction from the ground pours on the outer
+    layers. KiCad's Specctra exporter turns a filled zone into a plane, and
+    Freerouting then treats that net as already connected wherever the plane
+    reaches -- which is the behaviour the Main Board's README warns about,
+    because there it silently left GND pads stranded. Here it is the point:
+    GND and +5V should not be routed as traces at all.
+
+    Both stop at SELV_MIN. There is no mains-referenced plane on this board
+    and there is no plane crossing the barrier; the Schuko earth pin is unused,
+    so the mains side has nothing a plane could be for.
+    """
+    left = max(SELV_MIN, ZONE_INSET)
+    right = BOARD_W - ZONE_INSET
+    top, bottom = ZONE_INSET, BOARD_H - ZONE_INSET
+    for net_name, layer in PLANES:
+        net = nets.get(net_name)
+        if net is None:
+            raise SystemExit(f"no {net_name} net -- cannot pour its plane")
+        zone = pcbnew.ZONE(board)
+        zone.SetLayer(layer)
+        zone.SetNet(net)
+        zone.SetIsFilled(False)
+        zone.SetPadConnection(pcbnew.ZONE_CONNECTION_FULL)
+        zone.SetLocalClearance(mm(0.2))
+        zone.SetMinThickness(mm(0.2))
+        zone.SetIslandRemovalMode(pcbnew.ISLAND_REMOVAL_MODE_ALWAYS)
+        zone.SetZoneName(f"plane-{net_name}")
+        outline = zone.Outline()
+        outline.NewOutline()
+        for x, y in ((left, top), (right, top), (right, bottom), (left, bottom)):
+            outline.Append(mm(x), mm(y))
+        board.Add(zone)
+    return len(PLANES)
+
+
+def add_keepout_zones(board: "pcbnew.BOARD") -> int:
+    """Rule areas the autorouter has to respect, added at PLACEMENT time.
+
+    Placement keeps mains copper and isolated copper apart, but placement only
+    controls pads. Once the board goes to Freerouting the barrier band is just
+    empty board area, and empty board area on a dense two-layer design is
+    exactly where a router looks for room. Nothing in the DSN would tell it
+    otherwise: KiCad's Specctra exporter turns rule areas into `keepout`
+    records, so a rule area here is the only thing that does.
+
+    A smoke test bears out that the risk is real rather than theoretical only
+    in one direction: a two-pass run without this zone happened not to cross
+    the band, because no *net* has pads on both sides and so no connection
+    needs to. But a longer run optimising net length has every reason to cut
+    through it, and "it did not happen the first time" is not a design rule.
+
+    Two areas:
+
+    1. The isolation barrier, both copper layers, full board height.
+    2. The strip between the ESP32's antenna keepout and the right board edge.
+       Espressif's own rule area stops 0.7mm short of the edge, so the ground
+       pour would otherwise fill a sliver of copper directly off the end of a
+       PCB antenna. Outside the manufacturer's declared keepout and therefore
+       legal, but copper at a radiating edge is not something to ship because
+       a datasheet did not explicitly forbid it.
+    """
+    specs = [
+        ("barrier", [(MAINS_MAX, 0.0), (SELV_MIN, 0.0), (SELV_MIN, BOARD_H), (MAINS_MAX, BOARD_H)]),
+    ]
+    esp = board.FindFootprintByReference("U2")
+    if esp is None:
+        raise SystemExit("U2 not placed -- cannot extend its antenna keepout to the edge")
+    antenna = next((z for z in esp.Zones() if z.GetIsRuleArea()), None)
+    if antenna is None:
+        raise SystemExit("U2's footprint has no antenna rule area -- wrong footprint variant?")
+    bb = antenna.Outline().BBox()
+    right = bb.GetRight() / 1e6
+    if right < BOARD_W:
+        top, bottom = bb.GetTop() / 1e6, bb.GetBottom() / 1e6
+        specs.append(("antenna-to-edge",
+                      [(right, top), (BOARD_W, top), (BOARD_W, bottom), (right, bottom)]))
+
+    for name, points in specs:
+        zone = pcbnew.ZONE(board)
+        zone.SetIsRuleArea(True)
+        zone.SetDoNotAllowTracks(True)
+        zone.SetDoNotAllowVias(True)
+        zone.SetDoNotAllowPads(True)
+        zone.SetDoNotAllowCopperPour(True)
+        layers = pcbnew.LSET()
+        for layer in ALL_COPPER:
+            layers.AddLayer(layer)
+        zone.SetLayerSet(layers)
+        outline = zone.Outline()
+        outline.NewOutline()
+        for x, y in points:
+            outline.Append(mm(x), mm(y))
+        zone.SetZoneName(name)
+        board.Add(zone)
+    return len(specs)
+
+
 def make_via(board: "pcbnew.BOARD", net: "pcbnew.NETINFO_ITEM", x_nm: int, y_nm: int) -> None:
     via = pcbnew.PCB_VIA(board)
     via.SetPosition(pcbnew.VECTOR2I(x_nm, y_nm))
@@ -388,6 +523,12 @@ def add_stitching_vias(board: "pcbnew.BOARD", gnd_net: "pcbnew.NETINFO_ITEM") ->
     for box in keepouts:
         box.Inflate(clear)
 
+    # Rule areas -- the isolation band and the antenna keepout -- forbid vias
+    # outright. DRC reports a via inside one as items_not_allowed.
+    rule_areas = [z for z in board.Zones() if z.GetIsRuleArea()]
+    for fp in board.GetFootprints():
+        rule_areas += [z for z in fp.Zones() if z.GetIsRuleArea()]
+
     # Copper obstacles are tested as (start, end, half-width) segments rather
     # than bounding boxes. A diagonal track's bounding box is a poor stand-in
     # for the track: it is far too big in the empty corners, so box-based
@@ -422,7 +563,10 @@ def add_stitching_vias(board: "pcbnew.BOARD", gnd_net: "pcbnew.NETINFO_ITEM") ->
     # exists on the isolated side, so a stitching via anywhere left of the
     # barrier would be a GND via with no plane to tie together and copper
     # where the barrier says there is none.
-    x_start = max(margin, SELV_MIN)
+    # SELV_MIN plus the via's own radius and clearance: the limit applies to
+    # the copper edge, not the centre, and a via centred on the line hangs
+    # 0.3mm into the band. check_isolation_barrier() caught exactly this.
+    x_start = max(margin, SELV_MIN + VIA_DIAMETER / 2 + 0.2)
     span = BOARD_W - margin - x_start
     xs = [x_start + i * STITCH_PITCH for i in range(int(span // STITCH_PITCH) + 1)]
     ys = [margin + i * STITCH_PITCH for i in range(int((BOARD_H - 2 * margin) // STITCH_PITCH) + 1)]
@@ -430,6 +574,9 @@ def add_stitching_vias(board: "pcbnew.BOARD", gnd_net: "pcbnew.NETINFO_ITEM") ->
         for y in ys + [BOARD_H - margin]:
             pt = pcbnew.VECTOR2I(mm(x), mm(y))
             if any(bb.Contains(pt) for bb in keepouts):
+                continue
+            if any(area.HitTestFilledArea(pcbnew.F_Cu, pt, 0) or area.Outline().Collide(pt, mm(VIA_DIAMETER / 2 + 0.2))
+                   for area in rule_areas):
                 continue
             if not clear_of_copper(pt, clear):
                 continue
@@ -479,17 +626,24 @@ def pour_ground(board_path: str) -> None:
     gnd = board.FindNet("GND")
     if gnd is None:
         raise SystemExit("board has no GND net")
-    if board.Zones():
-        raise SystemExit("board already has zones -- regenerate it with build_pcb.py first")
+    # Rule areas are expected here -- build_pcb.py puts the isolation barrier
+    # and the antenna keepout in at placement time, and they have to survive
+    # into the routed board or the DSN loses them. It is a *filled* zone that
+    # would mean this step had already run.
+    already = [z for z in board.Zones()
+               if not z.GetIsRuleArea() and not z.GetZoneName().startswith("plane-")]
+    if already:
+        raise SystemExit("board already has ground zones -- regenerate it with build_pcb.py first")
 
     add_gnd_zones(board, gnd)
     stitches = add_stitching_vias(board, gnd)
     board.BuildConnectivity()
-    if not pcbnew.ZONE_FILLER(board).Fill(board.Zones()):
+    copper_zones = [z for z in board.Zones() if not z.GetIsRuleArea()]
+    if not pcbnew.ZONE_FILLER(board).Fill(copper_zones):
         raise SystemExit("zone fill failed")
     board.Save(board_path)
     areas = ", ".join(
-        f"{board.GetLayerName(z.GetLayer())} {z.GetFilledArea() / 1e12:.0f}mm2" for z in board.Zones()
+        f"{board.GetLayerName(z.GetLayer())} {z.GetFilledArea() / 1e12:.0f}mm2" for z in copper_zones
     )
     print(f"poured GND: {areas}, {stitches} stitching vias")
 
@@ -527,9 +681,60 @@ def check_isolation_barrier(board: "pcbnew.BOARD") -> None:
                     f"{ref} pad {pad.GetNumber()} ({net}) starts at x={left:.2f}, "
                     f"left of the isolated limit {SELV_MIN:.2f}"
                 )
+    # Copper, not just pads. On the placed board there is none of it yet, but
+    # this same function runs again after routing, where it is the only thing
+    # standing between the design and a track that took a shortcut through the
+    # band. A track is checked along its whole length, not at its endpoints: a
+    # segment from one side of the board to the other has both ends legal.
+    for item in board.GetTracks():
+        net = item.GetNetname()
+        if not net:
+            continue
+        if isinstance(item, pcbnew.PCB_VIA):
+            pos = item.GetPosition()
+            half = item.GetWidth(pcbnew.F_Cu) / 2
+            lo = hi = pos.x
+        else:
+            half = item.GetWidth() / 2
+            lo = min(item.GetStart().x, item.GetEnd().x)
+            hi = max(item.GetStart().x, item.GetEnd().x)
+        lo = (lo - half) / 1e6
+        hi = (hi + half) / 1e6
+        what = "via" if isinstance(item, pcbnew.PCB_VIA) else "track"
+        if net in mains_nets:
+            if hi > MAINS_MAX:
+                problems.append(f"{what} on {net} reaches x={hi:.2f}, past the mains limit {MAINS_MAX:.2f}")
+        elif lo < SELV_MIN:
+            problems.append(f"{what} on {net} reaches x={lo:.2f}, left of the isolated limit {SELV_MIN:.2f}")
+
+    # Filled copper. This is the case the barrier is most exposed to, because
+    # it is the one nobody looks at: a zone is not a track, so it appears in no
+    # routing review and in no ratsnest. add_gnd_zones() clips the pour to the
+    # isolated side by construction, and this is what proves it did.
+    for zone in board.Zones():
+        if zone.GetIsRuleArea():
+            continue
+        net = zone.GetNetname()
+        for layer in (pcbnew.F_Cu, pcbnew.B_Cu):
+            # GetFilledPolysList throws on a layer the zone is not on, rather
+            # than returning empty.
+            if not zone.IsOnLayer(layer):
+                continue
+            poly = zone.GetFilledPolysList(layer)
+            if poly.IsEmpty():
+                continue
+            bb = poly.BBox()
+            lo, hi = bb.GetLeft() / 1e6, bb.GetRight() / 1e6
+            if net in mains_nets:
+                if hi > MAINS_MAX:
+                    problems.append(f"filled zone on {net} reaches x={hi:.2f}, past the mains limit {MAINS_MAX:.2f}")
+            elif lo < SELV_MIN:
+                problems.append(f"filled zone on {net} reaches x={lo:.2f}, left of the isolated limit {SELV_MIN:.2f}")
+
     if problems:
         raise SystemExit(
-            "Isolation barrier violated:\n  " + "\n  ".join(problems)
+            "Isolation barrier violated:\n  " + "\n  ".join(problems[:20])
+            + (f"\n  ... and {len(problems) - 20} more" if len(problems) > 20 else "")
         )
 
     crossing = sorted(
@@ -650,58 +855,64 @@ PLACEMENT: Dict[str, Tuple[float, float, float, str]] = {
     # transmit and receive path and its loop areas are what a redesign would
     # regret first.
     "C16": (41.0, 6.0, 0, "10uF/50V X5R"),  # DC block into T1's primary
-    "R20": (42.0, 10.28, 0, "150R"),        # Rx series resistor
+    "R20": (49.02, 17.4, 0, "150R"),        # Rx series resistor
     "L2": (41.0, 14.0, 0, "150uH"),         # Rx resonant inductor
-    "C15": (46.5, 11.28, 0, "12nF"),        # Rx resonant capacitor
-    "C13": (48.5, 7.78, 0, "68pF C0G"),     # Sallen-Key feedback cap
-    "C14": (49.0, 14.28, 0, "68pF C0G"),    # Sallen-Key shunt cap
-    "R18": (48.5, 4.78, 0, "33k"),          # PA gain, feedback leg
-    "R19": (46.0, 20.77, 0, "10k"),         # PA gain, ground leg
-    "R17": (46.0, 17.77, 0, "22k"),         # Sallen-Key second series R
-    "R16": (66.0, 18.77, 0, "5.1k"),        # Sallen-Key first series R
-    "R15": (68.0, 9.78, 0, "1k"),           # Tx pre-filter series R
-    "C12": (72.5, 9.78, 0, "1nF C0G"),      # Tx pre-filter shunt C
-    "R14": (67.5, 6.78, 0, "270R"),         # PA current-limit resistor on CL
+    "C15": (52.77, 17.4, 0, "12nF"),        # Rx resonant capacitor
+    "C13": (65.0, 17.27, 0, "68pF C0G"),     # Sallen-Key feedback cap
+    "C14": (56.52, 17.4, 0, "68pF C0G"),    # Sallen-Key shunt cap
+    "R18": (67.5, 14.28, 0, "33k"),          # PA gain, feedback leg
+    "R19": (69.5, 17.27, 0, "10k"),         # PA gain, ground leg
+    "R17": (60.27, 17.4, 0, "22k"),         # Sallen-Key second series R
+    "R16": (72.0, 11.28, 0, "5.1k"),        # Sallen-Key first series R
+    "R15": (67.5, 11.28, 0, "1k"),           # Tx pre-filter series R
+    "C12": (72.0, 14.28, 0, "1nF C0G"),      # Tx pre-filter shunt C
+    "R14": (61.25, 21.0, 0, "270R"),         # PA current-limit resistor on CL
 
     # --- ST7580 and its support ------------------------------------------ #
     "U4": (56.0, 10.0, 0, "ST7580"),
-    "Y1": (56.0, 20.0, 0, "8MHz"),
-    "C2": (63.0, 12.78, 0, "100nF"),        # VDD_A
-    "C3": (63.0, 6.78, 0, "100nF"),         # VDD_B
-    "C4": (61.0, 3.77, 0, "100nF"),         # VDD_REG_1V8
-    "C5": (67.5, 12.78, 0, "100nF"),        # VDD_PLL
-    "C6": (56.22, 3.52, 0, "1uF"),          # VCCA
-    "C11": (70.5, 44.27, 0, "100nF"),       # VCC (12V) local decoupling
-    "FB1": (65.77, 44.4, 0, "FB"),          # VSSA-to-GND bridge
-    "FB2": (63.27, 9.89, 0, "FB"),          # VDD_A to VDD_PLL
-    "R6": (73.0, 18.77, 0, "10k"),          # RESETN pull-up
-    "R7": (65.5, 3.77, 0, "10k"),           # BR1
-    "R8": (66.0, 15.78, 0, "10k"),          # BR0
+    "Y1": (55.0, 26.5, 0, "8MHz"),
+    "C2": (47.8, 8.0, 90, "100nF"),        # VDD_A
+    "C3": (54.0, 2.9, 0, "100nF"),         # VDD_B
+    "C4": (64.0, 11.75, 90, "100nF"),         # VDD_REG_1V8
+    "C5": (53.31, 21.0, 0, "100nF"),        # VDD_PLL
+    "C6": (57.28, 21.0, 0, "1uF"),          # VCCA
+    "C11": (65.0, 21.0, 0, "100nF"),       # VCC (12V) local decoupling
+    "FB1": (49.3, 21.0, 0, "FB"),          # VSSA-to-GND bridge
+    "FB2": (43.77, 9.89, 0, "FB"),          # VDD_A to VDD_PLL
+    "R6": (47.8, 11.75, 90, "10k"),          # RESETN pull-up
+    # BR0 and BR1 are adjacent pads on the QFN's top edge (40 and 39, at
+    # x=57.25 and 57.75, y=6.55), so both escape upwards. R8 used to sit at
+    # (66, 15.78), below and right of the chip, which asked /ST_BR0 to travel
+    # around the whole east face of a 48-pin 0.5mm-pitch package. Freerouting
+    # could not place it and neither could the repair router. Its pull-up now
+    # sits beside BR1's, on the side the pin actually leaves from.
+    "R7": (60.6, 2.9, 0, "10k"),           # BR1
+    "R8": (57.3, 2.9, 0, "10k"),           # BR0
     "J3": (96.0, 12.0, 0, "ST7580_JTAG_DEBUG"),   # right edge
 
     # --- ESP32-C3 --------------------------------------------------------- #
     "U2": (90.5, 28.0, 270, "ESP32-C3-MINI-1"),
     "J2": (78.0, 28.0, 0, "ESP32_UART0_PROGRAMMING"),
-    "R4": (90.5, 18.77, 0, "10k"),          # EN pull-up
-    "R5": (90.5, 37.27, 0, "10k"),          # IO9/BOOT pull-up
-    "R9": (92.0, 64.78, 0, "5.1k"),         # USB-C CC1 pull-down
-    "R10": (87.5, 64.78, 0, "5.1k"),        # USB-C CC2 pull-down
+    "R4": (86.0, 18.77, 0, "10k"),          # EN pull-up
+    "R5": (73.0, 31.77, 0, "10k"),          # IO9/BOOT pull-up
+    "R9": (90.5, 64.78, 0, "5.1k"),         # USB-C CC1 pull-down
+    "R10": (95.0, 64.78, 0, "5.1k"),        # USB-C CC2 pull-down
 
     # --- Power tree, fed from U1's DC pads at x=45.6 ---------------------- #
-    "D5": (66.02, 35.8, 0, "SS34"),         # ORing, mains supply
-    "D6": (74.52, 39.8, 0, "SS34"),         # ORing, Terminal supply
-    "D7": (67.52, 48.8, 0, "SS34"),         # supercapacitor discharge
-    "D8": (84.02, 41.3, 0, "SS34"),         # boost rectifier
+    "D5": (66.02, 39.8, 0, "SS34"),         # ORing, mains supply
+    "D6": (67.52, 44.8, 0, "SS34"),         # ORing, Terminal supply
+    "D7": (48.52, 47.8, 0, "SS34"),         # supercapacitor discharge
+    "D8": (79.02, 42.8, 0, "SS34"),         # boost rectifier
     "C1": (58.0, 48.0, 0, "220uF"),         # HLK output bulk
     "C7": (58.0, 62.0, 0, "1F 5.5V"),       # supercapacitor hold-up
     "C10": (70.0, 62.0, 0, "100uF"),        # +5V bulk
-    "R11": (67.3, 68.17, 0, "10R"),         # supercapacitor inrush limit
-    "C8": (58.82, 36.2, 0, "22uF"),         # boost input
-    "C9": (65.83, 31.2, 0, "22uF"),         # boost output
+    "R11": (46.3, 43.17, 0, "10R"),         # supercapacitor inrush limit
+    "C8": (65.83, 35.2, 0, "22uF"),         # boost input
+    "C9": (58.82, 40.2, 0, "22uF"),         # boost output
     "L1": (88.0, 48.0, 0, "22uH"),          # boost inductor
     "U5": (80.0, 48.0, 0, "MT3608"),        # 5V -> 12V boost
-    "R12": (77.5, 44.27, 0, "19.1k"),       # boost feedback, top
-    "R13": (75.0, 47.27, 0, "1k"),          # boost feedback, bottom
+    "R12": (79.0, 51.77, 0, "19.1k"),       # boost feedback, top
+    "R13": (80.5, 54.77, 0, "1k"),          # boost feedback, bottom
     "U3": (80.0, 62.0, 0, "AMS1117-3.3"),   # 3V3 for the ESP32
 
     # --- User-facing, at the board edges ---------------------------------- #
@@ -709,9 +920,9 @@ PLACEMENT: Dict[str, Tuple[float, float, float, str]] = {
     "D2": (58.0, 74.0, 0, "LED (green)"),      # power
     "D3": (68.0, 74.0, 0, "LED (amber)"),      # PLC activity
     "D4": (78.0, 74.0, 0, "LED (blue)"),       # Wi-Fi
-    "R1": (70.16, 53.55, 0, "1k"),
-    "R2": (62.15, 40.55, 0, "1k"),
-    "R3": (84.15, 54.55, 0, "330R"),
+    "R1": (71.15, 55.55, 0, "1k"),
+    "R2": (67.66, 6.54, 0, "1k"),
+    "R3": (82.65, 38.05, 0, "330R"),
 }
 
 
@@ -719,6 +930,7 @@ def main() -> None:
     comps, nets = parse_netlist(NETLIST_PATH)
 
     board = pcbnew.CreateEmptyBoard()
+    board.SetCopperLayerCount(COPPER_LAYERS)
     add_board_outline(board)
 
     net_objs: Dict[str, "pcbnew.NETINFO_ITEM"] = {}
@@ -812,10 +1024,28 @@ def main() -> None:
     check_courtyard_overlaps(board)
     check_isolation_barrier(board)
     thermal = add_thermal_vias(board, net_objs["GND"])
+    # After placement, because the antenna keepout's geometry comes from U2.
+    keepouts = add_keepout_zones(board)
+    planes = add_plane_zones(board, net_objs)
 
     out_path = "../plc-board.kicad_pcb"
     board.Save(out_path)
-    print(f"wrote {out_path} ({len(comps)} components, {len(nets)} nets, {thermal} thermal vias)")
+    print(f"wrote {out_path} ({len(comps)} components, {len(nets)} nets, {thermal} thermal vias, {keepouts} keepout zones, {planes} inner planes)")
+
+    # The planes have to arrive at the DSN exporter *filled* to become planes,
+    # and ZONE_FILLER segfaults on a board built by CreateEmptyBoard -- it
+    # reaches for design settings that only exist once a board is loaded
+    # together with its .kicad_pro. So: save, reload, fill, save again.
+    reloaded = pcbnew.LoadBoard(out_path)
+    to_fill = [z for z in reloaded.Zones() if not z.GetIsRuleArea()]
+    reloaded.BuildConnectivity()
+    if not pcbnew.ZONE_FILLER(reloaded).Fill(to_fill):
+        raise SystemExit("inner plane fill failed")
+    reloaded.Save(out_path)
+    areas = ", ".join(
+        f"{reloaded.GetLayerName(z.GetLayer())} {z.GetFilledArea() / 1e12:.0f}mm2" for z in to_fill
+    )
+    print(f"filled the inner planes: {areas}")
     write_project_netclasses()
 
 
@@ -828,6 +1058,6 @@ if __name__ == "__main__":
     # why the pour cannot come first, and README.md for the full command
     # sequence.
     if "--pour" in sys.argv:
-        pour_ground("../main-board.kicad_pcb")
+        pour_ground("../plc-board.kicad_pcb")
     else:
         main()
