@@ -1,6 +1,73 @@
 GRIDNET — PLC/Power Board KiCad Schematic + PCB
-REV 0.5 (Board 1, the PLC Adapter's own PCB — see "Board 1 is the PLC
+REV 0.6 (Board 1, the PLC Adapter's own PCB — see "Board 1 is the PLC
 Adapter's PCB" below.)
+
+What changed in REV 0.6
+------------------------
+
+A routing pass. It did not finish — every run still ends one connection
+short — but what it found is worth more than the routing would have been:
+six separate defects stood between this board and a routed one, and each was
+invisible until the router hit it.
+
+**The QFN's power pins had no fanout.** The ST7580 puts nine +5V pads on
+three edges of a 48-pin 0.5mm-pitch package. Nothing passes between adjacent
+pads there, so each escapes radially, and the router then has to bring nine
+radial escapes back together around the outside of eleven others. Every run
+this project had made died on that. `add_power_fanout()` now gives each power
+pad a 1.6mm stub and a via at build time — what a person does by hand on a
+QFN and what no autorouter does for itself.
+
+**The pour ran after the repair, so the fanout vias were islands.** Planes
+are what connect those vias; until the copper is poured they are isolated
+points, and the repair router was being asked to tie them together — the
+exact problem the fanout removes. `route.sh` now pours before repairing. This
+is not the ordering the Main Board warns about: there the danger is pouring
+before *routing*, which makes the autorouter treat GND as done. With those
+two changes together, +5V stopped being a holdout at all.
+
+**The repair router ignored netclasses.** It laid 0.2mm track at 0.2mm
+clearance into the `Mains` class, which is 1.0mm at 2.5mm — on the mains side
+that is not a style question, it is the live-to-neutral spacing. Seven
+clearance errors in one run, every one on `/AC_L`, `/AC_N` or `/PLC_LINE`,
+all laid by the step meant to be finishing the job. It now reads the rules
+from the same table `build_pcb.py` writes into the project file: KiCad 9's
+Python binding returns `GetNetClass()` as a bare object with no accessors, so
+importing the source of truth is both simpler and harder to get out of step.
+
+**Correcting that exposed a floorplan that could not satisfy it.** Four mains
+nets at 1.0mm and 2.5mm need a 3.5mm pitch — about 16.5mm of channel with
+margins — and the mains column had 9.7mm once the parts were in it. The
+varistor lying flat is 22mm wide and blocked the column outright. `BARRIER_X`
+moved from 30 to 36, the varistor and the X1 capacitor now stand on end, and
+the isolated side gave up 6mm it was no longer short of.
+
+**And then `/AC_N` still would not route — the repair router again.** It
+stamped rule areas as obstacles inflated by the netclass clearance, which for
+a mains net is a 3mm halo. The isolation band starts at x = 32.02, so the halo
+reached 29.02 and swallowed T1's own mains pad at 30.92: that pad was
+unroutable by construction. A keepout is a boundary, not a conductor — copper
+may come up to its edge, it just may not cross. Stamping it with half the
+track width instead closed `/AC_N` in two segments.
+
+**A footprint was hanging off the board.** The JTAG header was moved to the
+top edge without checking its height: 13.79mm upright, centred at y = 4.6, put
+a third of it past y = 0. A whole routing run went by before anything noticed,
+and what noticed was the repair router reporting an unconnected item at
+y = −0.58. `check_on_board()` is now one line of arithmetic at placement time.
+
+Where that leaves routing: the autorouter gets 174 nets down to 4–10, the
+repair step closes most of the rest — eleven connections in one run — and each
+attempt ends holding exactly one. The holdouts are now a different ordinary
+signal every time (`/PLC_LED`, `/ST_CL`, `/ST_BR0`) rather than the systematic
+`+5V` cluster they were before, which is the signature of a board at the edge
+of what this toolchain does rather than of a defect. A ten-attempt run was
+started to let nondeterminism land it; Freerouting hung on the first attempt
+for 46 minutes and the run timed out. That hang is documented in the Main
+Board's README too.
+
+The board committed here is therefore placement, not routing: 62 components,
+25 thermal vias, 11 power fanouts, two keepout zones, DRC clean at 0 errors.
 
 What changed in REV 0.5
 ------------------------

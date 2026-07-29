@@ -43,14 +43,28 @@ import pcbnew
 board = pcbnew.LoadBoard('$BOARD')
 pcbnew.ExportSpecctraDSN(board, '$WORK/board.dsn')
 "
-    # Note for anyone tempted: KiCad writes every copper layer as
-    # '(type signal)', and rewriting In1.Cu/In2.Cu to '(type power)' in the DSN
-    # does stop Freerouting laying signals across the planes -- but it also
-    # stops it treating those planes as connecting GND and +5V, so it tries to
-    # route both as ordinary nets on two layers and fails badly: 52 unrouted
-    # against 7 without the change. Left routable on purpose. The planes take
-    # some cutting from inner-layer signals; each is ~5000mm2 and the refill
-    # after routing closes around whatever crosses them.
+    # Keep signals off the two plane layers. KiCad writes every copper layer as
+    # '(type signal)'; Specctra has a type for a plane and KiCad does not use
+    # it.
+    #
+    # This was tried once before and reverted, because back then the planes
+    # were poured *before* the DSN export: marking the layers stopped
+    # Freerouting laying signals across them, but also stopped it treating
+    # them as connecting GND and +5V, and it fell to 52 unrouted from 7. The
+    # planes now go in after routing, so that side-effect is gone and only the
+    # wanted half remains. Leaving them routable produced a real short --
+    # a +5V via through In2.Cu into a /ST_TMS track laid on the plane layer.
+    python3 - "$WORK/board.dsn" <<'PYDSN'
+import re, sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+for layer in ("In1.Cu", "In2.Cu"):
+    text, n = re.subn(rf"(\(layer {re.escape(layer)}\s*\n\s*\(type )signal(\))", r"\1power\2", text)
+    if n != 1:
+        sys.exit(f"could not mark {layer} as a power layer in the DSN (matched {n})")
+open(path, "w", encoding="utf-8").write(text)
+print("DSN: In1.Cu and In2.Cu marked as power layers")
+PYDSN
     "$JAVA" -jar "$FREEROUTING_JAR" -de "$WORK/board.dsn" -do "$WORK/board.ses" \
         --gui.enabled=false -mp "$PASSES" 2>&1 | grep -E "session completed" || true
 
@@ -61,10 +75,21 @@ pcbnew.ImportSpecctraSES(board, '$WORK/board.ses')
 board.Save('$BOARD')
 "
 
+    # Pour before repairing, not after. The planes are what connect the power
+    # fanout vias -- every power pad on the QFN gets a stub and a via at build
+    # time, and until the copper is poured those vias are isolated points the
+    # router would have to tie together itself, which is the problem the
+    # fanout exists to remove. Pouring first makes them connected, so repair
+    # only sees connections that are genuinely missing.
+    #
+    # This is not the ordering the Main Board warns about. There the danger is
+    # pouring before *routing*, which makes the autorouter treat GND as done
+    # and lay no copper for it. Routing has already happened here.
+    echo "== attempt $attempt/$ATTEMPTS: pouring ground =="
+    python3 build_pcb.py --pour
+
     echo "== attempt $attempt/$ATTEMPTS: finishing what the autorouter dropped =="
     if python3 finish_routing.py; then
-        echo "== pouring ground =="
-        python3 build_pcb.py --pour
         echo "== isolation barrier, on copper this time =="
         python3 -c "
 import sys; sys.path.insert(0, '.')
