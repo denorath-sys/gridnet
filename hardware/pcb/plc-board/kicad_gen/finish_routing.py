@@ -61,6 +61,19 @@ VIA_COST = 12       # in cells, to keep the router from stitching gratuitously
 Cell = Tuple[int, int, int]  # (x index, y index, layer index 0=F.Cu 1=B.Cu)
 LAYERS = (pcbnew.F_Cu, pcbnew.B_Cu)
 
+# Net-specific track width and clearance, taken from the same table
+# build_pcb.py writes into the project file. KiCad 9's Python binding returns
+# NETINFO_ITEM.GetNetClass() as a bare SwigPyObject with no accessors, so the
+# rules cannot be read back off the board; importing the source of truth is
+# both simpler and harder to get out of step.
+from build_pcb import NETCLASSES  # noqa: E402
+
+NET_RULES = {
+    net: (width, clearance)
+    for _name, (width, clearance, nets) in NETCLASSES.items()
+    for net in nets
+}
+
 
 def drc_unconnected(board_path: str) -> List[Tuple[float, float, float, float]]:
     """Ask kicad-cli which connections are missing.
@@ -132,14 +145,30 @@ class Grid:
             return
         grid[lo_x:hi_x + 1, lo_y:hi_y + 1] = True
 
+    def rules_for(self, net_code: int) -> Tuple[float, float]:
+        """(track width, clearance) in mm for this net, from its netclass.
+
+        Not the module constants. This board has a Mains netclass at 1.0mm /
+        2.5mm, and the repair router used to lay 0.2mm track at 0.2mm
+        clearance into it -- which on the mains side is not a style question,
+        it is the live-to-neutral spacing. Seven clearance errors in one run,
+        every one of them on /AC_L, /AC_N or /PLC_LINE, all of them laid by
+        this router while 'finishing' what the autorouter dropped.
+        """
+        net = self.board.FindNet(net_code)
+        if net is None:
+            return TRACK_WIDTH, CLEARANCE
+        return NET_RULES.get(net.GetNetname(), (TRACK_WIDTH, CLEARANCE))
+
     def build(self, net_code: int) -> Tuple[List["np.ndarray"], List["np.ndarray"]]:
         """Return (blocked-for-track, blocked-for-via) grids.
 
         Copper already on the net being routed is not an obstacle -- the
         router is free to run along it, since joining it is the whole point.
         """
-        track_radius = TRACK_WIDTH / 2 + CLEARANCE
-        via_radius = VIA_DIAMETER / 2 + CLEARANCE
+        width, clearance = self.rules_for(net_code)
+        track_radius = width / 2 + clearance
+        via_radius = VIA_DIAMETER / 2 + clearance
 
         blocked = [self._blank(), self._blank()]
         via_blocked = [self._blank(), self._blank()]
@@ -205,8 +234,16 @@ class Grid:
             rect = (box.GetLeft() / 1e6, box.GetTop() / 1e6,
                     box.GetRight() / 1e6, box.GetBottom() / 1e6)
             for idx in range(2):
-                self._stamp_box(blocked[idx], rect, track_radius)
-                self._stamp_box(via_blocked[idx], rect, via_radius)
+                # Half the track, not the clearance. A keepout is a boundary,
+                # not a conductor: copper may come right up to its edge, it
+                # just may not cross. Stamping it with the netclass clearance
+                # put a 3mm halo around the isolation band for mains nets --
+                # reaching x=29.02, which swallowed T1's own mains pad at
+                # 30.92 and made that pad unroutable by construction. /AC_N
+                # failed identically on every attempt of two runs before this
+                # was found.
+                self._stamp_box(blocked[idx], rect, width / 2)
+                self._stamp_box(via_blocked[idx], rect, VIA_DIAMETER / 2)
 
         # Keep off the board edge.
         edge = int(BOARD_MARGIN / GRID)
@@ -355,7 +392,8 @@ def path_to_tracks(board: "pcbnew.BOARD", path: Sequence[Cell], net: "pcbnew.NET
             track = pcbnew.PCB_TRACK(board)
             track.SetStart(point(previous))
             track.SetEnd(point(cell))
-            track.SetWidth(pcbnew.FromMM(TRACK_WIDTH))
+            width, _clearance = NET_RULES.get(net.GetNetname(), (TRACK_WIDTH, CLEARANCE)) if net else (TRACK_WIDTH, CLEARANCE)
+            track.SetWidth(pcbnew.FromMM(width))
             track.SetLayer(LAYERS[cell[2]])
             track.SetNet(net)
             board.Add(track)
@@ -447,6 +485,34 @@ def plane_layers_for(board: "pcbnew.BOARD", net_code: int) -> List[int]:
     return layers
 
 
+def existing_net_copper(board: "pcbnew.BOARD", net_code: int) -> List[Tuple[float, float, float]]:
+    """(x, y, radius) for every via and pad already on this net.
+
+    A via dropped on top of one of these connects nothing: the copper is
+    already there and already on the net. Same-net copper is deliberately not
+    an obstacle to the maze router -- joining it is the point -- which is
+    exactly why a via site has to be checked against it separately. Without
+    this the stitcher picks the same spot every round, because the via it left
+    there last round is invisible to it.
+    """
+    spots = []
+    for item in board.GetTracks():
+        if isinstance(item, pcbnew.PCB_VIA) and item.GetNetCode() == net_code:
+            pos = item.GetPosition()
+            spots.append((pos.x / 1e6, pos.y / 1e6, item.GetWidth(pcbnew.F_Cu) / 2e6))
+    for footprint in board.GetFootprints():
+        for pad in footprint.Pads():
+            if pad.GetNetCode() != net_code:
+                continue
+            box = pad.GetBoundingBox()
+            spots.append((
+                (box.GetLeft() + box.GetRight()) / 2e6,
+                (box.GetTop() + box.GetBottom()) / 2e6,
+                max(box.GetWidth(), box.GetHeight()) / 2e6,
+            ))
+    return spots
+
+
 def drop_via_to_plane(
     board: "pcbnew.BOARD",
     grid: "Grid",
@@ -454,23 +520,35 @@ def drop_via_to_plane(
     origin: Tuple[float, float],
     origin_layers: List[int],
 ) -> bool:
-    """Run a short track from `origin` to the nearest legal via site and stitch
+    """Run a short track from `origin` to the nearest usable via site and stitch
     down to this net's plane.
 
-    The search is the same maze router, aimed at whichever nearby cell can take
-    a via rather than at another pad. Everything about clearance, keepouts and
-    existing copper is therefore handled the way it already is.
+    On a board with power planes this is usually the *correct* repair rather
+    than a fallback: a pad on a planed net does not need a track to another
+    pad, it needs a via to its own plane. Freerouting knows that and uses it.
+
+    "Usable" carries weight. The site has to be reachable by the same maze
+    router that lays everything else -- so clearance, keepouts and existing
+    copper are all handled the way they already are -- *and* it has to be
+    somewhere this net does not already have copper. Skipping that second test
+    is what made an earlier version stitch the identical point three runs
+    running, once 0.1mm from pin 48's own pad.
     """
+    import math
+
     if not plane_layers_for(board, net.GetNetCode()):
         return False
+    occupied = existing_net_copper(board, net.GetNetCode())
     blocked, via_blocked = grid.build(net.GetNetCode())
     x0, y0 = origin
-    best = None
-    # Sweep outwards; the first via site that the router can actually reach is
-    # the one to use, and near beats far for both inductance and area.
-    for radius in [r / 10 for r in range(8, 61, 2)]:
-        for angle in range(0, 360, 15):
-            import math
+    clear = VIA_DIAMETER / 2 + CLEARANCE
+
+    def adds_nothing(x: float, y: float) -> bool:
+        return any((x - sx) ** 2 + (y - sy) ** 2 < (r + clear) ** 2 for sx, sy, r in occupied)
+
+    # Sweep outwards. Near beats far, for inductance and for board area alike.
+    for radius in [r / 10 for r in range(8, 121, 2)]:
+        for angle in range(0, 360, 10):
             x = x0 + radius * math.cos(math.radians(angle))
             y = y0 + radius * math.sin(math.radians(angle))
             gx, gy = int(round(x / GRID)), int(round(y / GRID))
@@ -478,28 +556,25 @@ def drop_via_to_plane(
                 continue
             if any(via_blocked[i][gx, gy] for i in range(len(LAYERS))):
                 continue
+            if adds_nothing(x, y):
+                continue
             path = grid.route(origin, origin_layers, (x, y), list(range(len(LAYERS))), net.GetNetCode())
-            if path is not None:
-                best = (path, x, y)
-                break
-        if best:
-            break
-    if not best:
-        return False
-    path, x, y = best
-    added = path_to_tracks(board, path, net)
-    via = pcbnew.PCB_VIA(board)
-    via.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(y)))
-    via.SetFrontWidth(pcbnew.FromMM(VIA_DIAMETER))
-    via.SetDrill(pcbnew.FromMM(VIA_DRILL))
-    via.SetNet(net)
-    via.SetLayerPair(pcbnew.F_Cu, pcbnew.B_Cu)
-    board.Add(via)
-    print(
-        f"stitched {net.GetNetname()} at ({origin[0]:.2f},{origin[1]:.2f}) down to its plane "
-        f"via ({x:.2f},{y:.2f}): {added} segments + 1 via"
-    )
-    return True
+            if path is None:
+                continue
+            added = path_to_tracks(board, path, net)
+            via = pcbnew.PCB_VIA(board)
+            via.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(y)))
+            via.SetFrontWidth(pcbnew.FromMM(VIA_DIAMETER))
+            via.SetDrill(pcbnew.FromMM(VIA_DRILL))
+            via.SetNet(net)
+            via.SetLayerPair(pcbnew.F_Cu, pcbnew.B_Cu)
+            board.Add(via)
+            print(
+                f"stitched {net.GetNetname()} at ({x0:.2f},{y0:.2f}) down to its plane "
+                f"via ({x:.2f},{y:.2f}): {added} segments + 1 via"
+            )
+            return True
+    return False
 
 
 def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -> Optional[str]:
@@ -537,6 +612,14 @@ def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -
                     return item.GetNetCode(), [LAYERS.index(layer)]
         return None
 
+    def is_pad(x: float, y: float) -> bool:
+        for footprint in board.GetFootprints():
+            for pad in footprint.Pads():
+                pos = pad.GetPosition()
+                if abs(pos.x / 1e6 - x) < 0.02 and abs(pos.y / 1e6 - y) < 0.02:
+                    return True
+        return False
+
     start = endpoint(x1, y1)
     target = endpoint(x2, y2)
     if start is None or target is None:
@@ -571,10 +654,14 @@ def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -
     # both four-layer runs ended holding a pair of adjacent ST7580 right-edge
     # pads it could not join -- pins 31 and 34, 1.55mm apart, each already
     # sitting over 5000mm2 of the very net it was trying to reach.
-    if drop_via_to_plane(board, grid, net, (x1, y1), start_layers):
-        return None
-    if drop_via_to_plane(board, grid, net, (x2, y2), target_layers):
-        return None
+    # Pads first. A track end on a planed net is copper that already goes
+    # somewhere; the pad is the thing that needs to get down to the plane, and
+    # stitching the wrong end leaves the reported gap exactly where it was.
+    ends = [((x1, y1), start_layers), ((x2, y2), target_layers)]
+    ends.sort(key=lambda e: not is_pad(*e[0]))
+    for origin, layers in ends:
+        if drop_via_to_plane(board, grid, net, origin, layers):
+            return None
 
     return (
         f"{net.GetNetname()}: no route from ({x1:.2f},{y1:.2f}) to ({x2:.2f},{y2:.2f}), "
