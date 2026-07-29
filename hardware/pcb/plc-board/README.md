@@ -5,6 +5,25 @@ Adapter's PCB" below.)
 What changed in REV 0.6
 ------------------------
 
+**The stackup is a rule now, not a sentence.** `STACKUP` in `build_pcb.py`
+is written into the board's design settings: 1.6mm FR-4, four layers, 1oz
+outer copper (0.5oz inner, which does not matter here — the inner layers carry
+only planes and every current-carrying trace, the 1.0mm mains nets included,
+is on an outer layer), 0.2mm minimum track and clearance, 0.6mm vias on 0.3mm
+drills, 0.15mm annular ring, 0.25mm hole-to-hole.
+
+This came out of closing the same item on the Main Board, where it exposed
+something worse than an undocumented assumption: KiCad's minimums default to
+zero, and both boards carried `m_TrackMinWidth = 0.0` and
+`m_MinClearance = 0.0` through every DRC run this project has reported. A
+0.05mm trace would have passed.
+
+It caught something here immediately. The power fanout sends each of U4's
+power pads 1.6mm straight out, and those pads are on a 0.5mm pitch — so their
+vias landed on a 0.5mm pitch too, which with a 0.3mm drill is 0.2mm
+hole-to-hole against the 0.25mm rule. Three pairs. The fanout now checks
+hole spacing and steps a crowded neighbour further out.
+
 A routing pass. It did not finish — every run still ends one connection
 short — but what it found is worth more than the routing would have been:
 six separate defects stood between this board and a routed one, and each was

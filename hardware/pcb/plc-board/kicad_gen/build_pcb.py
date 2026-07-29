@@ -538,6 +538,21 @@ def add_power_fanout(board: "pcbnew.BOARD", nets: Dict[str, "pcbnew.NETINFO_ITEM
     for fp in board.GetFootprints():
         for pad in fp.Pads():
             obstacles.append((pad.GetBoundingBox(), pad.GetNetname()))
+    # Holes already on the board, so the fanout does not drill into its own
+    # neighbours. U4's power pads sit on a 0.5mm pitch; sending each one the
+    # same 1.6mm outward puts their vias on that same pitch, which with a
+    # 0.3mm drill is 0.2mm hole-to-hole against a 0.25mm rule. Three pairs came
+    # back from DRC exactly that way once the stackup made the rule real. The
+    # distance sweep below now steps a crowded neighbour further out instead.
+    holes = [(v.GetPosition().x, v.GetPosition().y, v.GetDrillValue())
+             for v in board.GetTracks() if isinstance(v, pcbnew.PCB_VIA)]
+    hole_gap = mm(STACKUP["min_hole_to_hole_mm"])
+
+    def hole_clear(x: int, y: int) -> bool:
+        need = mm(VIA_DRILL) / 2 + hole_gap
+        return all((x - hx) ** 2 + (y - hy) ** 2 >= (need + hd / 2) ** 2
+                   for hx, hy, hd in holes)
+
     placed = 0
     for ref in FANOUT_PARTS:
         fp = board.FindFootprintByReference(ref)
@@ -563,7 +578,10 @@ def add_power_fanout(board: "pcbnew.BOARD", nets: Dict[str, "pcbnew.NETINFO_ITEM
                                     pcbnew.VECTOR2I(2 * clear, 2 * clear))
                 if any(box.Intersects(spot) and net != name for box, net in obstacles):
                     continue
+                if not hole_clear(vx, vy):
+                    continue
                 make_via(board, nets[name], vx, vy)
+                holes.append((vx, vy, mm(VIA_DRILL)))
                 track = pcbnew.PCB_TRACK(board)
                 track.SetStart(pos)
                 track.SetEnd(pcbnew.VECTOR2I(vx, vy))
@@ -871,6 +889,45 @@ def check_courtyard_overlaps(board: "pcbnew.BOARD") -> None:
         raise SystemExit("Courtyard overlaps in PLACEMENT:\n  " + "\n  ".join(clashes))
 
 
+# Manufacturing constraints, written into the board's design rules so DRC
+# enforces them. KiCad's minimums default to zero -- the Main Board carried
+# m_TrackMinWidth = 0.0 and m_MinClearance = 0.0 all the way through routing,
+# so a 0.05mm trace would have passed every check this project runs.
+#
+# Four layers on the same 1.6mm FR-4 as Board 2. Inner copper on a standard
+# 4-layer stack is lighter than outer, which does not affect this board: the
+# inner layers carry only planes, and every current-carrying trace -- the
+# 1.0mm mains nets included -- is on an outer layer at 1oz, which is what the
+# IPC-2221 widths in NETCLASSES assume.
+#
+# The minimums are what the board already uses, promoted from convention to
+# rule. Not a claim about any fab's capability; confirming them against the
+# chosen manufacturer is a separate step, listed in the README.
+STACKUP = {
+    "thickness_mm": 1.6,
+    "copper_weight_outer_oz": 1,
+    "copper_weight_inner_oz": 0.5,
+    "min_track_mm": 0.2,
+    "min_clearance_mm": 0.2,
+    "min_via_diameter_mm": 0.6,
+    "min_via_drill_mm": 0.3,
+    "min_hole_to_hole_mm": 0.25,
+    "min_annular_ring_mm": 0.15,
+}
+
+
+def apply_stackup(board: "pcbnew.BOARD") -> None:
+    """Write STACKUP into the board's design rules so DRC enforces it."""
+    ds = board.GetDesignSettings()
+    ds.SetBoardThickness(mm(STACKUP["thickness_mm"]))
+    ds.m_TrackMinWidth = mm(STACKUP["min_track_mm"])
+    ds.m_MinClearance = mm(STACKUP["min_clearance_mm"])
+    ds.m_ViasMinSize = mm(STACKUP["min_via_diameter_mm"])
+    ds.m_MinThroughDrill = mm(STACKUP["min_via_drill_mm"])
+    ds.m_HoleToHoleMin = mm(STACKUP["min_hole_to_hole_mm"])
+    ds.m_ViasMinAnnularWidth = mm(STACKUP["min_annular_ring_mm"])
+
+
 def add_board_outline(board: "pcbnew.BOARD") -> None:
     pts = [(0, 0), (BOARD_W, 0), (BOARD_W, BOARD_H), (0, BOARD_H), (0, 0)]
     for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
@@ -1043,6 +1100,7 @@ def main() -> None:
 
     board = pcbnew.CreateEmptyBoard()
     board.SetCopperLayerCount(COPPER_LAYERS)
+    apply_stackup(board)
     add_board_outline(board)
 
     net_objs: Dict[str, "pcbnew.NETINFO_ITEM"] = {}
