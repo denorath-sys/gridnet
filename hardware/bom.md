@@ -1,5 +1,5 @@
 GRIDNET — Bill of Materials (BOM)
-REV 0.7 — Prototype (Single Unit, Retail Pricing)
+REV 0.8 — Prototype (Single Unit, Retail Pricing)
 
 REV 0.5 note: several REV 0.4 part choices didn't hold up under review —
 either a real spec mismatch (a display resolution the driver IC can't
@@ -11,6 +11,13 @@ REV 0.6 note: the antenna chain REV 0.5 added to fix that last item was
 itself unbuildable — the wrong connector generation, a connector style that
 cannot be reached by a cable, and no antenna at all. Board 2 items 13-15
 and the totals are corrected here.
+
+REV 0.8 note: Board 1 is a four-layer board. Not for signal density -- it
+could very nearly be routed on two -- but because the ST7580's nine +5V pads
+on a 48-pin 0.5mm-pitch package need a plane, and on two layers both copper
+layers are spoken for by ground and the mains barrier. See
+hardware/pcb/plc-board/README.md for the four two-layer routing runs that
+established this. The PCB line above moves from 2 to 4 layers accordingly.
 
 REV 0.7 note: AN4068 was finally obtained, so Board 1's line coupling is no
 longer a placeholder. The coupling transformer has a real part number, and
@@ -37,14 +44,14 @@ PLC Adapter (Separate Unit)
 #ComponentPart NumberDescriptionQtyUnit Cost (USD)Total1PLC SoCST7580CENELEC EN50065, OFDM/FSK1$5.70$5.702Wi-Fi ModuleESP32-C3-MINI-1Wi-Fi AP for terminal connection1$0.80$0.803SMPSHLK-5M05230VAC → 5VDC1$3.50$3.504Outage power pathUSB-C + supercap + boostRuns from the Terminal's battery when mains is gone1 set$2.30$2.305Protection circuitTVS + MOVLayers 1-2, same as Board 1 (Layer 3 went with the inverter)1 set$1.00$1.006Schuko plug—Direct wall mount, 230V1$1.50$1.507EnclosureMat black ABSCompact square, ~110×90×30mm — sized for Board 1's 100×80mm PCB plus the Schuko plug and wall clearance; REV 0.4's ~80×80×40mm estimate predates that PCB size and never got reconciled against it, unlike the other REV 0.4 numbers listed in "Design Notes — REV History" below1$3.00$3.008LEDs—3× status LED (Power/PLC/WiFi)3$0.10$0.309Passive components—Resistors, capacitors—$1.00$1.00Adapter Total~$19.10
 
 PCB Manufacturing (JLCPCB, 5 units each)
-BoardSizeLayersQtyCostPLC / Power Board100×80mm25 pcs~$8.00Main Board100×80mm25 pcs~$8.00Adapter Board70×60mm25 pcs~$5.00PCB Total~$21.00
+BoardSizeLayersQtyCostPLC / Power Board100×80mm4 — see hardware/pcb/plc-board/README.md5 pcs~$20.00Main Board100×80mm25 pcs~$8.00Adapter Board70×60mm25 pcs~$5.00PCB Total~$33.00
 
 Cost Summary
-ModuleCost (USD)Board 1 — PLC / Power~$18.20Board 2 — Main Board~$13.45Display & Input~$50.70Power System~$10.70Enclosure~$21.50PLC Adapter~$19.10PCB Manufacturing~$21.00TOTAL (single prototype)~$154.65
+ModuleCost (USD)Board 1 — PLC / Power~$18.20Board 2 — Main Board~$13.45Display & Input~$50.70Power System~$10.70Enclosure~$21.50PLC Adapter~$19.10PCB Manufacturing~$33.00TOTAL (single prototype)~$166.65
 
 REV 0.4 totaled ~$135.80 (and the top-level README separately claimed
 ~$112). Neither figure survives this revision — the corrected total is
-~$154.65, about $18.85 higher, almost entirely from the display module
+~$166.65, about $30.85 higher, almost entirely from the display module
 (+$14.00: REV 0.4's number was for a bare ILI9488 panel that couldn't
 actually produce the specced resolution, not a real like-for-like part).
 
@@ -144,4 +151,4 @@ named component family for the PLC coupling transformer (was a bare "—"
 with no part reference at all — still needs confirming against ST7580's
 application note before ordering, this isn't a fully closed item).
 
-Last updated: 2026 — REV 0.7
+Last updated: 2026 — REV 0.8

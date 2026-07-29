@@ -1,6 +1,56 @@
 GRIDNET — PLC/Power Board KiCad Schematic + PCB
-REV 0.4 (Board 1, the PLC Adapter's own PCB — see "Board 1 is the PLC
+REV 0.5 (Board 1, the PLC Adapter's own PCB — see "Board 1 is the PLC
 Adapter's PCB" below.)
+
+What changed in REV 0.5
+------------------------
+
+**This is a four-layer board now**, and not for signal density — it could very
+nearly be routed on two. It is four because of what has to be *planed*.
+
+```
+  L1  F.Cu    signals, all components
+  L2  In1.Cu  GND plane      (4984 mm², isolated side only)
+  L3  In2.Cu  +5V plane      (4960 mm², isolated side only)
+  L4  B.Cu    signals
+```
+
+The ST7580 puts nine +5V pads on three edges of a 48-pin 0.5mm-pitch package.
+Nothing passes between adjacent pads there — a 0.2mm track with 0.2mm
+clearance needs 0.6mm and the gap is 0.25mm — so every pin escapes radially,
+and those nine have to find each other around the outside of eleven other
+escapes. **Four full two-layer routing runs failed on exactly that**, and
+never on the same pad twice: (52.05, 6.70), (59.45, 11.25), (59.45, 8.25),
+and twice on the pin 3 / pin 48 pair that wraps the top-left corner. A fifth
+run with a filled +5V island on F.Cu routed cleanly — and was then broken by
+its own ground pour, which chopped the island from 413 mm² to 109 mm² and
+stranded eight connections. That net wants a plane, and on two layers both
+copper layers are already spoken for by ground and the mains barrier.
+
+**The barrier goes through all four layers.** An inner plane that crossed it
+would bridge mains to SELV *inside the laminate*, where no inspection would
+ever find it. Both keepout rule areas are on all four copper layers and both
+planes stop at `SELV_MIN`; that is checked, not assumed — the filled polygons
+start at exactly x = 33.98.
+
+Two things the layer change taught, both recorded in `route.sh` so they are
+not rediscovered:
+
+- **Do not mark the inner layers `(type power)` in the DSN.** KiCad writes
+  every copper layer as `(type signal)`, and rewriting the two inner ones does
+  stop Freerouting laying signals across the planes — but it also stops it
+  treating those planes as connecting GND and +5V, so it routes both as
+  ordinary nets on two layers and fails badly: 52 unrouted against 7 without
+  the change. The planes take some cutting from inner-layer signals; each is
+  ~5000 mm² and the refill after routing closes around whatever crosses them.
+- **The repair router had no idea planes existed.** It indexed a two-entry
+  layer tuple with whatever layer it found a track on, and threw on the first
+  inner-layer track. It now ignores inner-plane copper for its F.Cu/B.Cu
+  occupancy grid, and can terminate a connection with a via down to a plane
+  instead of a track to another pad — which on a planed net is usually the
+  correct answer and is what Freerouting itself does.
+
+Routing is **not finished**; see "What's not done yet".
 
 What changed in REV 0.4
 ------------------------
@@ -412,18 +462,37 @@ What's not done yet
   synchronise to. AN4068's circuit is recorded in docs/plc-coupling.md if
   it is ever wanted; note that its Figure 14 could not be read, so the
   block cannot be built from that list alone.
-- **Routing.** Placement is done (REV 0.4); no copper is laid yet. The
-  Main Board's flow applies — Specctra DSN out, Freerouting, SES back in,
-  `finish_routing.py` to verify and repair, then the pour — with two
-  additions this board needs and that one did not: the autorouter must be
-  kept out of the isolation band, and `check_isolation_barrier()` has to be
-  re-run on the routed board, since today it only sees pads. A DSN keepout
-  across the band is the mechanism for the first.
-- **The pour sliver past the antenna keepout.** The GND pour currently fills
-  the ~0.7mm of board between `U2`'s antenna rule area and the right edge.
-  That is outside Espressif's own declared keepout, so it is within spec, but
-  copper at a radiating edge is worth removing with a local rule area during
-  the routing pass.
+- **Routing.** The pipeline runs end to end and gets close — 152 unrouted
+  down to 4-8 from the autorouter, with the repair step closing most of what
+  is left (`+5V`, `/ST_PA_OUT`, `/AC_N`, `/PLC_LINE`, `/ST_TMS`,
+  `/ST_VDD_REG_1V8` across runs) — but no run has produced a complete board.
+  Each ends holding one connection.
+
+  Two specific things stand in the way, both in `finish_routing.py` rather
+  than in the design:
+
+  - **`drop_via_to_plane()` reports success without checking it helped.** It
+    stitched the same point three times in one run: it finds a legal via site,
+    returns True, DRC reports the same pair unconnected, and it stitches
+    again. It also chose a site 0.1mm from pin 48's pad — same net, so it
+    added nothing. It needs to verify the reported connection actually closed,
+    and to stitch the endpoint that is a *pad* rather than whichever end comes
+    first.
+  - **U4 pin 3 (VDDIO, left edge) has no reachable via site.** The pad sits
+    directly over solid +5V plane copper — confirmed, the filled polygon
+    contains its coordinates — so the connection it needs is a via, not a
+    track. There is no legal site within the helper's 6mm search, which is a
+    congestion problem on the QFN's left edge, not a search-radius one.
+
+  Everything else the routing pass needed is in place and verified: the DSN
+  carries the barrier as a `keepout` on all four layers, the repair router
+  respects rule areas, and `check_isolation_barrier()` now runs on copper —
+  pads, tracks, vias and filled zone polygons — where it has already caught
+  one real defect (stitching vias hanging 0.3mm into the band, because the
+  grid started at `SELV_MIN` and a via has a radius).
+- ~~The pour sliver past the antenna keepout~~ — closed in REV 0.5. A second
+  rule area now covers the strip between `U2`'s antenna keepout and the right
+  board edge, on all four layers.
 - **The creepage figure itself.** 7.96mm comes from T1's land pattern and
   sits inside the range convention quotes for reinforced insulation at 230V,
   but this project has not read IEC 60950-1 or 62368-1 directly. Every other
