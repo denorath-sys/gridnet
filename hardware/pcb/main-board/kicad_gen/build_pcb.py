@@ -404,6 +404,47 @@ def check_courtyard_overlaps(board: "pcbnew.BOARD") -> None:
         raise SystemExit("Courtyard overlaps in PLACEMENT:\n  " + "\n  ".join(clashes))
 
 
+# Manufacturing constraints. The stackup this board has always assumed --
+# 1.6mm FR-4, two layers, 1oz outer copper -- was written down in this
+# directory's README and nowhere else, and the IPC-2221 trace-width table
+# depends on the copper weight.
+#
+# It was worse than undocumented. KiCad's minimums were left at their
+# defaults, which are zero: m_TrackMinWidth and m_MinClearance both read back
+# as 0.0mm on the finished board, so DRC was enforcing no process limit at
+# all. A 0.05mm trace would have passed every check this project runs.
+#
+# The numbers below are what the board already uses -- 0.2mm track, 0.2mm
+# clearance, 0.6mm vias on 0.3mm drills -- promoted from convention to rule.
+# That is deliberately not a claim about any fab's capability: it makes DRC
+# catch anything that drifts *below* what the design was drawn to, which is
+# the failure that would otherwise reach fabrication unseen. Confirming these
+# against the chosen manufacturer's process is a separate step, listed in the
+# README.
+STACKUP = {
+    "thickness_mm": 1.6,
+    "copper_weight_oz": 1,
+    "min_track_mm": 0.2,
+    "min_clearance_mm": 0.2,
+    "min_via_diameter_mm": 0.6,
+    "min_via_drill_mm": 0.3,
+    "min_hole_to_hole_mm": 0.25,
+    "min_annular_ring_mm": 0.15,
+}
+
+
+def apply_stackup(board: "pcbnew.BOARD") -> None:
+    """Write STACKUP into the board's design rules so DRC enforces it."""
+    ds = board.GetDesignSettings()
+    ds.SetBoardThickness(mm(STACKUP["thickness_mm"]))
+    ds.m_TrackMinWidth = mm(STACKUP["min_track_mm"])
+    ds.m_MinClearance = mm(STACKUP["min_clearance_mm"])
+    ds.m_ViasMinSize = mm(STACKUP["min_via_diameter_mm"])
+    ds.m_MinThroughDrill = mm(STACKUP["min_via_drill_mm"])
+    ds.m_HoleToHoleMin = mm(STACKUP["min_hole_to_hole_mm"])
+    ds.m_ViasMinAnnularWidth = mm(STACKUP["min_annular_ring_mm"])
+
+
 def add_board_outline(board: "pcbnew.BOARD") -> None:
     pts = [(0, 0), (BOARD_W, 0), (BOARD_W, BOARD_H), (0, BOARD_H), (0, 0)]
     for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
@@ -534,6 +575,7 @@ def main() -> None:
     comps, nets = parse_netlist(NETLIST_PATH)
 
     board = pcbnew.CreateEmptyBoard()
+    apply_stackup(board)
     add_board_outline(board)
 
     net_objs: Dict[str, "pcbnew.NETINFO_ITEM"] = {}

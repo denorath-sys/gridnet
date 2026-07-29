@@ -812,12 +812,27 @@ ground pour itself. What is left:
 - **Return-path continuity for the SPI/I2C buses.** The pours give every
   signal a return plane, but nothing has checked that a bus does not
   cross a slot in the pour where its return current would have to detour.
-- **A stackup decision.** Everything above assumes 1oz outer copper on a
-  standard 1.6mm FR-4 two-layer board. That has not been stated anywhere
-  as a requirement, and the trace-width table depends on it. It is no
-  longer an *impedance* decision as well: with the antenna path gone,
-  nothing on this board is controlled-impedance, so the stackup only has
-  to satisfy the IPC-2221 current widths and the fab's minimums.
+- ~~A stackup decision~~ — closed. It is now `STACKUP` in `build_pcb.py`,
+  written into the board's own design rules rather than into prose: 1.6mm
+  FR-4, two layers, 1oz copper, 0.2mm minimum track and clearance, 0.6mm
+  vias on 0.3mm drills, 0.15mm annular ring, 0.25mm hole-to-hole.
+
+  Writing it down turned up something worse than an undocumented
+  assumption. **KiCad's minimums were left at their defaults, which are
+  zero.** `m_TrackMinWidth` and `m_MinClearance` both read back as 0.0mm on
+  the finished, DRC-clean board — so every "0 violations" this project has
+  reported was measured against no process limit at all. A 0.05mm trace, a
+  via with no annular ring, two holes touching: all would have passed.
+
+  The values above are what the board already uses, promoted from
+  convention to rule, so DRC now catches anything that drifts *below* what
+  the design was drawn to. The routed board passes them unchanged: 0
+  violations, 0 unconnected, same as before. That is the point — the rules
+  describe this board, they do not reshape it.
+
+  Still open, and a different question: whether these minimums suit the
+  manufacturer actually chosen. They are this design's own floor, not a
+  claim about anyone's process.
 - **A human eye on the autorouted result before fab.** DRC-clean and
   netclass-correct is not the same as well laid out. The specific things
   a review should look at: the density of the escape fan under `U5`, and
