@@ -255,8 +255,19 @@ consequences follow directly:
 
 Firmware updates *are* signed — Ed25519, verified by the bootloader
 ([`docs/firmware-arch.md`](docs/firmware-arch.md)). The network layer has
-no equivalent. Closing that gap is a design task that has not been started,
-and there is no threat model document yet.
+no equivalent.
+
+A threat model now exists for closing this: [`docs/threat-model.md`](docs/threat-model.md)
+scopes the adversary as a hostile neighbour on the same wire, and records
+the decisions — Ed25519 identity bound to an address by trust-on-first-use,
+signing tiered so that routing, broadcasts and code are always signed while
+ordinary messages are opt-in, and the crypto moved to the ESP32-C3 because
+Ed25519's working set does not fit the `ROUTER` task's 2KB stack. **Nothing
+is implemented**; the wire format above is still the unauthenticated one.
+
+It is also explicit about what authentication does *not* fix — a signed
+route advertisement proves who said it, not that the route exists — and
+about what stays out of scope: device theft, traffic analysis and jamming.
 
 **Duplicate addresses are not detected.** Addresses are self-assigned with
 no registry, and `docs/protocol.md` currently attributes collision
@@ -284,6 +295,7 @@ gridnet/
 ├── docs/
 │   ├── protocol.md            (full protocol stack)
 │   ├── firmware-arch.md       (Zephyr + Forth VM)
+│   ├── threat-model.md        (adversary scope, attacks, auth decisions)
 │   ├── electrical-safety.md   (CENELEC compliance)
 │   ├── plc-adapter-power.md   (adapter power architecture + EN 50065 analysis)
 │   └── plc-coupling.md        (line coupling network: AN4068 retuned for B+C)
