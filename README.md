@@ -73,7 +73,7 @@ Separate unit. Plugs directly into any wall outlet (Schuko). Connects to termina
 | **Power** | HLK-5M05 SMPS, 230VAC → 5VDC |
 | **Indicators** | 3× LED: Power / PLC / Wi-Fi |
 
-**Prototype BOM cost: ~$152 USD** (single unit, retail component pricing — see [`hardware/bom.md`](hardware/bom.md) REV 0.5 for the full breakdown and why this went up from the original ~$112 estimate)
+**Prototype BOM cost: ~$149.25 USD** for one Terminal plus one Adapter — ~$104.35 and ~$44.90 respectively (single unit, retail component pricing). See [`hardware/bom.md`](hardware/bom.md) REV 0.9 for the full breakdown, including why the earlier ~$112 and ~$166.65 figures were both wrong.
 
 ---
 
@@ -193,7 +193,7 @@ GRIDNET puts a low-voltage signal on the mains through a transformer. It does no
 - **Galvanic isolation is mandatory and load-bearing.** The ST7580 reaches the line only through the coupling transformer, and the HLK-5M05 is an isolated supply. The USB-C cable to the Terminal sits on that isolated secondary — the user handles it while the adapter is in a wall socket, so this barrier is what stands between them and the mains.
 - **Two protection layers**: TVS (P6KE250CA) for transients, MOV (S20K275) for sustained overvoltage.
 
-⚠️ **One open compliance item**: the A-band (9–95 kHz) is allocated to electricity suppliers, and a project like this belongs in 95–148.5 kHz. `docs/protocol.md` still specifies A-band throughout and needs updating. See [`docs/electrical-safety.md`](docs/electrical-safety.md) REV 0.6, which corrects an earlier claim in this project that a 24V injection was within EN 50065 limits. It was not.
+⚠️ **One open compliance item**: no EN 50065-1 conformance claim is justified until a conducted-emission sweep is run on a prototype. The band allocation itself is settled — the A-band (9–95 kHz) is reserved for electricity suppliers, so GRIDNET uses B (95–125 kHz) and C (125–140 kHz), and the hardware commits to that choice through Board 1's coupling network ([`docs/plc-coupling.md`](docs/plc-coupling.md), [`docs/protocol.md`](docs/protocol.md)). What remains is the measurement, which needs hardware that does not exist yet. See [`docs/electrical-safety.md`](docs/electrical-safety.md) REV 0.6, which also corrects an earlier claim in this project that a 24V injection was within EN 50065 limits. It was not.
 
 ---
 
@@ -205,7 +205,7 @@ GRIDNET puts a low-voltage signal on the mains through a transformer. It does no
 | 🏘 Neighborhood messaging | Hyperlocal communication without internet subscriptions |
 | 🛒 Local commerce | Shops write their own order systems in Forth — no cloud, no monthly fee |
 | 🎮 Games | Turn-based strategy and text adventures played over the power grid |
-| 🔒 Privacy | No accounts, no logs, no cloud. Messages exist only in the devices they pass through |
+| 🔒 No cloud | No accounts, no logs, no servers — nothing leaves the neighbourhood. Note that this is *not* the same as confidentiality: the protocol has no encryption yet, and store-and-forward means a message can sit in a relaying neighbour's device for up to 7 days in plaintext. See "Known Gaps" below |
 | 👾 Retro / Hacker | Amber display, mechanical keyboard, Forth VM, RISC-V. It boots to READY. |
 
 ---
@@ -217,16 +217,55 @@ GRIDNET puts a low-voltage signal on the mains through a transformer. It does no
 | Hardware architecture (dual-board design) | ✅ Complete |
 | Communication protocol stack | ✅ Complete |
 | PLC Adapter power architecture ([`docs/plc-adapter-power.md`](docs/plc-adapter-power.md)) | ✅ Complete — adapter runs off the Terminal's battery during an outage; the 24V inverter and its master-election protocol were removed (never able to run, and outside EN 50065-1) |
-| Protection circuit topology (TVS + MOV + relay) | ✅ Complete — topology and parts selected ([`hardware/bom.md`](hardware/bom.md)); not yet a drawn schematic |
+| Protection circuit (TVS + MOV) | ✅ Complete — two layers, not three: the relay/optocoupler layer went with the inverter. Parts selected ([`hardware/bom.md`](hardware/bom.md)) and now drawn — `P6KE250CA` and `S20K275` are in Board 1's schematic and placed on its PCB |
 | Main Board schematic + PCB layout ([`hardware/pcb/main-board`](hardware/pcb/main-board)) | ✅ Complete — custom parts datasheet-verified, PCB placed, routed, ground-poured on both layers, DRC clean (0 violations, 0 unconnected). REV 0.7 was a pre-fab design review that caught a refdes-drift bug placing parts in each other's positions (crystal load caps 51mm from the crystal), a boost-converter switching loop spread across 63mm, and every trace at 0.2mm including a 2.4A path. REV 0.8 found the antenna path was fiction — a phantom U.FL duplicating the module's own jack, a trace nothing could drive, and an invented `ANT` symbol pin — and that the "grid of stitching vias" was nine vias in one column, because `BOX2I.Inflate()` mutates in place (now 167, worst-case return path 55mm → 16.8mm) — see that directory's README |
 | PLC/Power Board (BOM's Board 1, the PLC Adapter's PCB — see [`hardware/pcb/plc-board`](hardware/pcb/plc-board)) | ✅ REV 0.3 schematic complete, ERC-clean (350 warnings, 0 errors). Power architecture: Terminal USB-C inlet, Schottky ORing, supercapacitor hold-up, 5V→12V boost feeding the ST7580's `VCC`, hardware transmit-current limit. Line coupling now built too — transmit active filter around the ST7580's own PA, receive resonant filter, and the coupling transformer into the mains. Topology from ST's AN4068, values rescaled from its A-band reference design to GRIDNET's 95–140 kHz band ([`docs/plc-coupling.md`](docs/plc-coupling.md)). PCB placement complete (REV 0.5), now a **four-layer** board: L1/L4 signals, In1.Cu GND plane, In2.Cu +5V plane. Four layers because the ST7580's nine +5V pads on a 48-pin 0.5mm-pitch package need a plane, and two two-layer copper layers are already spoken for by ground and the mains barrier — see that directory's README for the four runs that established it. The 7.96mm isolation barrier cuts all four layers and only the AC-DC module and the coupling transformer cross it; verified geometrically on every pad, track, via and filled zone. Routing (REV 0.6) runs end to end: the autorouter gets 174 nets to 4-10 and the repair step closes most of the rest, but every attempt ends holding exactly one connection. Six defects were fixed getting there — QFN power fanout, pour-before-repair ordering, netclass-aware repair, a mains column too narrow for its own clearance rule, a keepout halo that made a pad unroutable, and a footprint hanging off the board edge. |
 | Case design (CAD) | 📋 Planned — only target external dimensions exist (see Hardware Overview); no CAD model |
 | Software architecture (Zephyr + Forth VM) | ✅ Complete |
 | Electrical safety analysis | ✅ Complete |
 | Protocol & Forth VM reference prototypes ([`tools/`](tools/), Python, pre-hardware validation) | ✅ Complete |
-| **PCB fabrication / Hardware prototype** | 🔄 Next step — Main Board has been through two design-review passes and is DRC-clean. RF layout is no longer on its list: there is no RF net on the board (the antenna is a cable assembly from the module's own jack). What is left before fab is a stackup decision, a return-path review of the SPI/I2C buses, and a human eye on the autorouted copper (see [`hardware/pcb/main-board`](hardware/pcb/main-board) "What's not done yet"). Board 1's schematic is complete and its PCB layout can now start; before it is fabricated it needs mains creepage/clearance treatment the Main Board never required, and before any EN 50065-1 claim it needs a conducted-emission sweep |
+| **PCB fabrication / Hardware prototype** | 🔄 Next step — Main Board has been through two design-review passes and is DRC-clean. RF layout is no longer on its list: there is no RF net on the board (the antenna is a cable assembly from the module's own jack). The stackup is no longer an open decision — it is now `STACKUP` in `build_pcb.py` (1.6mm FR-4, two layers, 1oz copper) and written into the board's own design rules, which turned up that KiCad's manufacturing minimums had been left at zero all along: every "0 violations" this project reported before that had been measured against no process limit at all. The board passes the real rules unchanged. What is left before fab is a return-path review of the SPI/I2C buses and a human eye on the autorouted copper (see [`hardware/pcb/main-board`](hardware/pcb/main-board) "What's not done yet"). Board 1 is further along than "schematic complete" — it is placed, four-layer, and routed end to end but for a single connection every attempt ends holding (REV 0.6). Before it is fabricated it needs that last net closed and the mains creepage/clearance treatment the Main Board never required; before any EN 50065-1 claim it needs a conducted-emission sweep |
 | Embedded firmware (Zephyr, on real hardware) | 📋 Planned — starts after PCB prototype |
 | Field testing | 📋 Planned |
+
+---
+
+## Known Gaps
+
+Things this design does not currently do. They are listed here rather than
+left for a reader to discover, because two of them affect whether the
+network can be trusted in the situation it exists for.
+
+**There is no message authentication.** `SRC` is a plaintext field in the
+packet header, and on a shared broadcast medium any node can set it to any
+value. The sandbox rule in [`docs/protocol.md`](docs/protocol.md) —
+"source address locked, app cannot spoof sender" — constrains a Forth app
+running on its own device; it says nothing about a modified node. The
+consequences follow directly:
+
+- **ROUTE poisoning.** The routing layer is distance-vector with no
+  authentication, so any node can advertise `hop_count 0` for an address it
+  does not own and pull that traffic to itself.
+- **Forged emergency broadcasts.** `BROADCAST 0x03` is flooded to the whole
+  mesh and signed by nothing.
+- **Storage exhaustion.** Store-and-forward holds messages for 7 days on
+  behalf of unauthenticated senders.
+- **Unverified code distribution.** `APP_DATA 0x10` moves Forth applications
+  peer-to-peer, from peers whose identity is not established.
+
+Firmware updates *are* signed — Ed25519, verified by the bootloader
+([`docs/firmware-arch.md`](docs/firmware-arch.md)). The network layer has
+no equivalent. Closing that gap is a design task that has not been started,
+and there is no threat model document yet.
+
+**Duplicate addresses are not detected.** Addresses are self-assigned with
+no registry, and `docs/protocol.md` currently attributes collision
+detection to CSMA/CA. That is a media-access mechanism — it detects a busy
+channel, not two nodes claiming `01.03.07.12`. Nothing in the protocol
+notices the duplicate, and the routing table oscillates when it happens.
+
+**No encryption.** Message contents are plaintext on the wire and plaintext
+in every relaying device's store-and-forward queue.
 
 ---
 

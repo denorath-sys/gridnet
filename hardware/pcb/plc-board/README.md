@@ -587,10 +587,11 @@ What's not done yet
   **deleted**. Relay, optocoupler and voltage sensing existed only to
   isolate the inverter from the line, and there is no inverter. Layers
   1–2 (TVS, MOV) remain and are built.
-- **Which CENELEC band, in the protocol docs.** The hardware is no longer
-  undecided: the coupling network is tuned for B+C, 95–140 kHz, and
-  changing that means changing four component values. docs/protocol.md
-  still describes A-band operation in places and needs to catch up.
+- ~~**Which CENELEC band, in the protocol docs.**~~ Closed. The hardware was
+  never undecided — the coupling network is tuned for B+C, 95–140 kHz, and
+  changing that means changing four component values — and docs/protocol.md
+  now describes that band throughout. What remains is the conducted-emission
+  sweep any EN 50065-1 claim depends on, which needs a prototype.
 - **`J1`'s replacement**: the BOM's `J1` (Schuko-plug + LED wiring) isn't
   in this schematic pass — the mains connector here (also called `J1` in
   the generated schematic, a coincidental naming collision, not the same

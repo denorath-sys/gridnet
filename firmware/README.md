@@ -1,16 +1,18 @@
-GRIDNET — Firmware
+# GRIDNET — Firmware
 
-Status: Not started. Firmware development begins after the hardware
+**Status: Not started.** Firmware development begins after the hardware
 prototype is complete and validated — see the top-level README's Project
 Status table.
 
 Two Python prototypes already exist and inform this planned structure:
-tools/protocol-sim/ validates the protocol/routing stack that src/router/
-and src/channel/ will implement, and tools/forth-vm/ validates the Forth
-VM that src/forth/ will implement. Neither is a substitute for real
+[`tools/protocol-sim/`](../tools/protocol-sim/) validates the protocol/routing stack that `src/router/`
+and `src/channel/` will implement, and [`tools/forth-vm/`](../tools/forth-vm/) validates the Forth
+VM that `src/forth/` will implement. Neither is a substitute for real
 firmware — see their own READMEs for what's actually been tested.
 
-Planned Structure
+## Planned Structure
+
+```
 firmware/
 ├── README.md              ← this file
 ├── CMakeLists.txt         ← Zephyr build system
@@ -33,16 +35,22 @@ firmware/
 └── bootloader/
     ├── main.c             ← Bootloader (microSD + DFU update)
     └── crypto/            ← Ed25519 signature verification
+```
 
-Build Requirements
+Note that `bootloader/crypto/` is the only cryptography in this tree. The
+protocol layer that `src/router/` and `src/plc/` will implement has no
+authentication designed for it yet — see [`docs/protocol.md`](../docs/protocol.md)
+"Security — What Is Not Protected" before building on it.
 
-Zephyr RTOS v3.x
-West (Zephyr build tool)
-RISC-V GCC toolchain
-Optional: OpenOCD (JTAG debug)
+## Build Requirements
 
+- Zephyr RTOS v3.x
+- West (Zephyr build tool)
+- RISC-V GCC toolchain
+- Optional: OpenOCD (JTAG debug)
 
-Contributing
-If you have experience with Zephyr RTOS, RISC-V, or ST7580 PLC and want to contribute, please open an Issue or see CONTRIBUTING.md.
+## Contributing
 
-See docs/firmware-arch.md for full architecture documentation.
+If you have experience with Zephyr RTOS, RISC-V, or ST7580 PLC and want to contribute, please open an Issue or see [`CONTRIBUTING.md`](../CONTRIBUTING.md).
+
+See [`docs/firmware-arch.md`](../docs/firmware-arch.md) for full architecture documentation.

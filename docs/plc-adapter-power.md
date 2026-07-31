@@ -245,9 +245,12 @@ Open questions
   coupling capacitor and the `RX_IN` path all depend on it.
 - **`ZC_IN` (zero crossing)** has no circuit yet. With no relay to align to a
   zero crossing, its remaining use is mains-presence detection and PLC timing.
-- **Which CENELEC band to use.** A-band is not available to this project. The
-  95–148.5 kHz range is, and the ST7580 covers it, but `docs/protocol.md`
-  specifies A-band throughout and that needs revisiting.
+- ~~**Which CENELEC band to use.**~~ Closed. A-band is not available to this
+  project; B (95–125 kHz) and C (125–140 kHz) are, the ST7580 covers them, and
+  `docs/protocol.md` now specifies them throughout. Board 1's coupling network
+  is tuned for that band (`docs/plc-coupling.md`), so the choice is committed
+  in hardware rather than only on paper. What is still open is the
+  conducted-emission sweep that any EN 50065-1 claim depends on.
 - **The Terminal must become a power source.** Its USB-C port is strapped as
   a sink (5.1k CC pull-downs). Sourcing to the adapter needs either a second
   dedicated connector or dual-role support, and Main Board REV 0.7's +5V
