@@ -161,9 +161,14 @@ By contrast, firmware updates *are* authenticated: Ed25519, verified by the
 bootloader before flashing (see [`firmware-arch.md`](firmware-arch.md)). The
 asymmetry is not deliberate — the network layer simply has no equivalent yet.
 
-No threat model has been written. Designing message authentication (and
-deciding whether it can afford a signature on a 2.4 kbps link at all) is open
-work, tracked in the top-level README's "Known Gaps".
+A threat model now exists — see [`threat-model.md`](threat-model.md), which
+scopes the adversary (a hostile neighbour on the same wire), records the
+decisions that follow (Ed25519 identity bound to an address by
+trust-on-first-use, tiered signing, `TYPE` bit 7 as the signed flag, new
+`IDENT`/`IDENT_REQ` packet types), and is explicit about what stays broken
+afterwards. None of it is implemented, and this document still specifies the
+unauthenticated wire format above. Writing the authenticated format is the
+next step.
 
 ---
 
