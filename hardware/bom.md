@@ -1,7 +1,23 @@
 # GRIDNET — Bill of Materials (BOM)
 
-**REV 0.9 — Prototype (Single Unit, Retail Pricing)**
+**REV 0.10 — Prototype (Single Unit, Retail Pricing)**
+*(revision ten, following 0.9 — not 0.1)*
 
+> **REV 0.10 note:** `J1` is no longer an estimate. It is Würth 691311400102,
+> the part the PCB footprint has been using all along
+> (`TerminalBlock_Wuerth_691311400102_P7.62mm`) — WR-TBL 3114, 2-pole, 7.62mm,
+> 300V / 20A (UL), $0.42 at single quantity.
+>
+> Pricing it surfaced a gap the estimate had been covering: **it is a
+> pluggable header, and the plug that mates with it was never in the BOM.**
+> Würth 691351400002, $1.25. Without it the board can be fabricated and
+> populated with no way to attach the Schuko plug's L/N wires. `J1` therefore
+> goes from an estimated $0.70 to a real $1.67 across two line items, and the
+> total from ~$149.25 to **~$150.22**.
+>
+> The one-piece alternative was considered and declined for now — see the note
+> under the Board 1 table.
+>
 > **REV 0.9 note:** this file described a system with three PCBs and two PLC
 > modems. It has one of each. Board 1's schematic
 > ([`pcb/plc-board/plc-board.kicad_sch`](pcb/plc-board/plc-board.kicad_sch)) carries the ESP32-C3, the
@@ -79,11 +95,23 @@ checked against the schematic directly.
 | 14 | Coupling inductor | 12µH, ≥2A saturation, ≤0.1Ω DCR | `L3` — series element of the line coupling resonance with item 15; the saturation and DCR figures are AN4068's own selection criteria, not preferences — insertion loss and distortion into a heavily loaded line depend on them | 1 | $0.30 | $0.30 |
 | 15 | X1 safety capacitor | 150nF X1 MKP, p=15mm | `C17` — series coupling into the live conductor. X1 grade is a safety requirement, not a filter one: this part sits between the board's analog ground and 230V | 1 | $0.60 | $0.60 |
 | 16 | Coupling passives | 150µH + 12nF (Rx resonance), 10µF/50V X5R (DC block), 68pF/1nF C0G + 5.1k/22k/33k/10k/1k/150R (Tx active filter) | `L2`, `C15`, `C16`, `C12`–`C14` and the Tx filter resistor network — the rest of the line coupling, values rescaled from AN4068's A-band reference design to GRIDNET's 95–140kHz band, see [`docs/plc-coupling.md`](../docs/plc-coupling.md) | 1 set | $0.80 | $0.80 |
-| 17 | Mains terminal block | 7.62mm pitch, 2-way, mains-rated | `J1` (`MAINS_L_N`) — L/N from the Adapter's Schuko plug. The pitch is not a preference: the 5.08mm placeholder left 2.08mm between its own pads against the `Mains` netclass's standards-derived 2.5mm L-to-N rule, so it failed DRC on its own connector. **Cost is a class estimate — an exact part has not been selected**, only the pitch and rating that the clearance rule forces | 1 | $0.70 | $0.70 |
-| 18 | Status LEDs | — | `D2`/`D3`/`D4` — Power (green, always-on), PLC (amber, driven by the ST7580's `PL_TX_ON`), Wi-Fi (blue, GPIO-driven so firmware can show real status). On-board and wired to the rails directly, not brought out to a separate header | 3 | $0.10 | $0.30 |
-| 19 | Programming / debug headers | — | `J2` (ESP32-C3 UART0 — without this there is no way to flash the module at all) and `J3` (ST7580 JTAG) | 2 | $0.20 | $0.40 |
-| 20 | Passive components | — | Remaining bulk/bypass R, C, L and ferrite beads (`C1`–`C6`, `C8`–`C11`, `FB1`–`FB2`, `R1`–`R20` less the coupling network above) | — | $1.50 | $1.50 |
-| | | | | | **Board 1 Total** | **~$20.40** |
+| 17 | Mains header | Würth Elektronik 691311400102 | `J1` (`MAINS_L_N`) — WR-TBL series 3114, closed vertical PCB header, 2-pole, 7.62mm pitch, 300V / 20A (UL), 1600 VAC withstanding. The pitch is not a preference: the 5.08mm placeholder left 2.08mm between its own pads against the `Mains` netclass's standards-derived 2.5mm L-to-N rule, so it failed DRC on its own connector. The current rating is irrelevant here — the HLK-5M05 draws about 30mA at 230V — the pitch is what the clearance rule buys. This is the part the PCB footprint already uses | 1 | $0.42 | $0.42 |
+| 18 | Mains header mating plug | Würth Elektronik 691351400002 | Female plug for item 17 — the Schuko plug's L/N wires terminate here, and it plugs onto `J1`. **A pluggable header is only half a connector**; this part was missing from the BOM entirely through REV 0.9, so the board could have been fabricated with no way to attach mains wiring. Kept pluggable rather than swapped for a one-piece block because being able to detach mains from the board without desoldering is worth $1.25 during prototype bring-up | 1 | $1.25 | $1.25 |
+| 19 | Status LEDs | — | `D2`/`D3`/`D4` — Power (green, always-on), PLC (amber, driven by the ST7580's `PL_TX_ON`), Wi-Fi (blue, GPIO-driven so firmware can show real status). On-board and wired to the rails directly, not brought out to a separate header | 3 | $0.10 | $0.30 |
+| 20 | Programming / debug headers | — | `J2` (ESP32-C3 UART0 — without this there is no way to flash the module at all) and `J3` (ST7580 JTAG) | 2 | $0.20 | $0.40 |
+| 21 | Passive components | — | Remaining bulk/bypass R, C, L and ferrite beads (`C1`–`C6`, `C8`–`C11`, `FB1`–`FB2`, `R1`–`R20` less the coupling network above) | — | $1.50 | $1.50 |
+| | | | | | **Board 1 Total** | **~$21.37** |
+
+> **On the one-piece alternative.** Würth 691214410002 (WR-TBL 2144, 7.62mm
+> horizontal entry, rising cage clamp) would replace both items above with a
+> single part at roughly $0.83–1.07, and carries a VDE rating of 450 VAC with
+> 2500 VAC withstanding — the latter lining up with IEC 60664's 2500V rated
+> impulse for overvoltage category II at 230V, where the 3114's published
+> cULus figure is 1600 VAC. It was not adopted here because it needs a
+> footprint change, a PCB regeneration and a fresh DRC pass on a board that is
+> otherwise ready to fabricate. Worth revisiting before any production run —
+> note also its 1.31 mm² (16 AWG) wire ceiling, which rules out 1.5 mm²
+> internal wiring.
 
 ## Board 2 — Main Board (100×80mm)
 
@@ -180,11 +208,11 @@ Grouped by the two products this project actually builds.
 | Board 2 fabrication | ~$8.00 |
 | *Terminal subtotal* | *~$104.35* |
 | **PLC Adapter** | |
-| Board 1 — PLC / Power | ~$20.40 |
+| Board 1 — PLC / Power | ~$21.37 |
 | Non-PCB parts (plug, enclosure) | ~$4.50 |
 | Board 1 fabrication | ~$20.00 |
-| *Adapter subtotal* | *~$44.90* |
-| **TOTAL (single prototype, one of each)** | **~$149.25** |
+| *Adapter subtotal* | *~$45.87* |
+| **TOTAL (single prototype, one of each)** | **~$150.22** |
 
 REV 0.4 totaled ~$135.80 and the top-level README separately claimed ~$112;
 REV 0.8 corrected those to ~$166.65. That figure did not survive either — it
@@ -192,8 +220,9 @@ counted the PLC Adapter twice, once as Board 1's line items and again as a
 parallel "PLC Adapter" bill, plus a 70×60mm PCB that does not exist. Removing
 the duplicate takes $14.60 of parts and $5.00 of fabrication off; adding the
 five components Board 1's schematic has but its BOM never listed (ESP32-C3,
-AMS1117-3.3, 8MHz crystal, 3 status LEDs, 2 programming headers) and
-re-pricing `J1` puts $2.20 back. Net: **~$149.25**.
+AMS1117-3.3, 8MHz crystal, 3 status LEDs, 2 programming headers) puts $1.80
+back, and pricing `J1` as the real part plus the mating plug it needs adds
+another $1.37 over the header it replaced. Net: **~$150.22**.
 
 The display module remains the single largest line at $32.00 — more than
 either PCB and its parts.
@@ -302,4 +331,4 @@ application note before ordering, this isn't a fully closed item).
 
 ---
 
-Last updated: 2026 — REV 0.9
+Last updated: 2026 — REV 0.10

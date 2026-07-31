@@ -76,7 +76,7 @@ Separate unit. Plugs directly into any wall outlet (Schuko). Connects to termina
 | **Power** | HLK-5M05 SMPS, 230VAC → 5VDC |
 | **Indicators** | 3× LED: Power / PLC / Wi-Fi |
 
-**Prototype BOM cost: ~$149.25 USD** for one Terminal plus one Adapter — ~$104.35 and ~$44.90 respectively (single unit, retail component pricing). See [`hardware/bom.md`](hardware/bom.md) REV 0.9 for the full breakdown, including why the earlier ~$112 and ~$166.65 figures were both wrong.
+**Prototype BOM cost: ~$150.22 USD** for one Terminal plus one Adapter — ~$104.35 and ~$45.87 respectively (single unit, retail component pricing). See [`hardware/bom.md`](hardware/bom.md) REV 0.10 for the full breakdown, including why the earlier ~$112 and ~$166.65 figures were both wrong.
 
 ---
 
