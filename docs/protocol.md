@@ -19,13 +19,50 @@ GRIDNET uses a custom lightweight protocol designed for low-bandwidth, high-late
 ## Packet Format
 
 ```
-[AA AA AA] [55] [LEN 2B] [SRC 4B] [DST 4B] [SEQ 2B] [TYPE 1B] [PAYLOAD] [CRC16 2B]
+[AA AA AA] [55] [LEN 2B] [SRC 4B] [DST 4B] [SEQ 4B] [TYPE 1B] [PAYLOAD] [CRC16 2B]
  preamble   sync   len    source    dest      seq      type       data      checksum
 ```
 
-- Total header size: 15 bytes
+- Total header size: 17 bytes
 - Maximum payload: 256 bytes
 - Broadcast address: `FF.FF.FF.FF`
+
+### `SEQ` is 4 bytes
+
+`SEQ` was 2 bytes through REV 0.5, sized for duplicate suppression during
+flooding — a window measured in seconds. It is not big enough for anything
+that outlives that window:
+
+| Send rate | 16-bit wrap | 32-bit wrap |
+|---|---|---|
+| 5 packets/s (the Forth app rate limit) | 3.6 hours | 27 years |
+| 10 packets/min | 4.6 days | 817 years |
+
+**Store-and-forward retains messages for 7 days.** At any plausible send
+rate a stored message outlives the counter that identifies it, so its `SEQ`
+may have been reused before it is delivered. That breaks ordering and makes
+replay indistinguishable from a legitimate retransmission — a correctness
+problem before it is a security one.
+
+At 32 bits the counter does not wrap in the life of the hardware. The cost
+is two bytes: a signed short message goes from 410.0 ms to 416.7 ms on air
+(+1.6%), and network-wide beacon load from 1.844% to 1.889%.
+
+`SEQ` must be **persisted across reboots**, or a reboot resets the counter
+and reopens replay. Writing it on every packet would wear the flash
+(W25Q64, ~100k cycles), so the implementation should persist a high-water
+mark ahead of the current value — `current + 1000` — and resume from it on
+boot. The 32-bit space makes the discarded interval irrelevant.
+
+### `TYPE` bit allocation
+
+```
+TYPE byte:  [7] SIGNED   [6] RELAYED   [5:0] type code (0x00-0x3F)
+```
+
+Codes occupy `0x01`–`0x12`, so six bits are sufficient and the two flags
+cost no bytes. Bit 7 is defined in [`threat-model.md`](threat-model.md),
+bit 6 in [`routing.md`](routing.md).
 
 There is no authentication field. `SRC` is set by the sender and verified by
 nothing — see "Security — What Is Not Protected" below before relying on it.
@@ -72,31 +109,32 @@ manner of ARP announcement or DHCP `ARPCHECK`) is unspecified work.
 Distance-vector routing table advertisement — this is how the neighbor table above actually learns hop counts beyond 1, which REV 0.4 left unspecified. Unlike MSG/APP_DATA, a ROUTE packet is never flooded/relayed across the mesh; instead every device periodically re-broadcasts its own table (already hop-incremented) on its own schedule, and the information spreads outward one hop per advertisement cycle — the same mechanism RIP uses.
 
 ```c
-typedef struct {
-    uint8_t  type;          // 0x04 = ROUTE
-    uint8_t  src[4];        // Advertiser's address
-    uint16_t seq;           // Sequence number
-    RouteEntry entries[];   // One per known destination, packed back-to-back
-} RoutePacket;
-
+// The payload of a ROUTE packet is a bare array of these — nothing else.
 typedef struct {
     uint8_t  address[4];    // Destination address
     uint8_t  hop_count;     // Hops from the advertiser to this destination (0 = the advertiser itself)
-} RouteEntry;               // 5 bytes per entry — up to 51 entries fit in one 256-byte payload
+} RouteEntry;               // 5 bytes per entry — 51 entries fit in one 256-byte payload
 ```
+
+REV 0.5 wrapped these entries in a `RoutePacket` struct carrying `type`,
+`src` and `seq`. All three are already in the packet header, so the wrapper
+spent 7 bytes restating them and created a question with no answer — which
+value wins if the body's `src` disagrees with the header's `SRC`? It is
+removed. That also corrects the entry count: with the 7-byte wrapper only 49
+entries fit, not the 51 REV 0.5 claimed. Without it, 51 is right.
 
 Every device always includes itself at `hop_count` 0. On receipt, a device compares each entry's (`hop_count` + 1) against its own table and keeps the lower value, recording the sender as `next_hop`. A device discards any incoming entry whose address is its own — the minimal loop-prevention this simplified distance-vector scheme relies on (no split-horizon/poison-reverse).
 
 Hop counts are capped at 15 (RIP-style "infinity"); entries at or above the cap are dropped rather than propagated further, bounding runaway counts across a brief segment partition/reconnect. An entry not refreshed within 3 advertisement intervals (180s) is considered stale and dropped from that device's own next advertisement — the usual "3 missed heartbeats" convention.
 
 > ⚠️ **This section does not scale and is being replaced.** At the 60s
-> interval below, twenty nodes on one segment spend 30.4% of the channel on
+> interval below, twenty nodes on one segment spend 30.7% of the channel on
 > routing alone — before signatures. [`routing.md`](routing.md) works out why
 > and redesigns it around the fact that a PLC segment is a broadcast domain,
 > where one-hop neighbours can be learned passively at zero airtime cost.
 > The description below is the current specification, not the intended one.
 
-Advertisement interval: 60 seconds. Deliberately long: a full table (up to 255 bytes of payload) costs meaningfully more airtime than a 9-byte heartbeat on a 2.4–9.6kbps link — at 2.4kbps, one full-size ROUTE broadcast occupies the channel for roughly 900ms, so every device doing this too often would eat directly into the bandwidth available for MSG traffic. Routing information is not time-critical: a stale hop count costs an extra relay, not a lost packet.
+Advertisement interval: 60 seconds. Deliberately long: a full table (up to 255 bytes of payload) costs meaningfully more airtime than a 9-byte heartbeat on a 2.4–9.6kbps link — at 2.4kbps, one full-size ROUTE broadcast occupies the channel for 920ms, so every device doing this too often would eat directly into the bandwidth available for MSG traffic. Routing information is not time-critical: a stale hop count costs an extra relay, not a lost packet.
 
 ## Automatic Channel Selection
 
@@ -155,9 +193,11 @@ At the protocol level:
   modified node — not an app, the node itself — can transmit as any address.
 - **No encryption.** Payloads are plaintext on the wire, and plaintext in the
   7-day store-and-forward queue of every device that relays them.
-- **No replay protection.** `SEQ` is a 2-byte sequence number for ordering and
-  duplicate suppression, not a nonce; nothing prevents a captured packet from
-  being retransmitted.
+- **No replay protection.** `SEQ` is now 4 bytes and wide enough to be the
+  basis of one (see "`SEQ` is 4 bytes" above), but nothing checks it yet:
+  the receiving side needs a highest-seen value and a sliding bitmap per
+  source, and neither is specified. Until then a captured packet can be
+  retransmitted.
 - **Unauthenticated routing.** Any node can advertise `hop_count 0` for an
   address it does not own and attract that traffic (see "ROUTE Packet"). There
   is no split-horizon or poison-reverse either.

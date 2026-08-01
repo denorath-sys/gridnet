@@ -103,8 +103,10 @@ Separate unit. Plugs directly into any wall outlet (Schuko). Connects to termina
 ### Packet Format
 
 ```
-[AA AA AA][55][LEN 2B][SRC 4B][DST 4B][SEQ 2B][TYPE 1B][PAYLOAD][CRC16 2B]
+[AA AA AA][55][LEN 2B][SRC 4B][DST 4B][SEQ 4B][TYPE 1B][PAYLOAD][CRC16 2B]
  preamble  sync  len    source   dest    seq     type     data      checksum
+
+TYPE byte:  [7] SIGNED   [6] RELAYED   [5:0] type code
 ```
 
 ### Addressing
@@ -270,11 +272,11 @@ route advertisement proves who said it, not that the route exists — and
 about what stays out of scope: device theft, traffic analysis and jamming.
 
 **`ROUTE` does not scale, independently of security.** Twenty nodes on one
-distribution segment would spend 30.4% of a 2.4 kbps channel on routing
+distribution segment would spend 30.7% of a 2.4 kbps channel on routing
 advertisements alone. [`docs/routing.md`](docs/routing.md) redesigns it
 around a property the original missed — a PLC segment is a broadcast domain,
 so one-hop neighbours can be learned passively at zero airtime cost — which
-takes the same case to 1.84%. That document also states, for the first time
+takes the same case to 1.89%. That document also states, for the first time
 in this project, what topology the network is assumed to have, and flags
 that the assumption has never been measured.
 

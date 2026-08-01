@@ -95,8 +95,11 @@ says nothing about where the code came from.
 
 ### A6 — Replay
 
-`SEQ` is a 2-byte sequence number for ordering and duplicate suppression,
-not a nonce. A captured packet can be retransmitted.
+`SEQ` is a sequence number for ordering and duplicate suppression, not a
+nonce. A captured packet can be retransmitted. Widening it to 4 bytes
+removes the obstacle — at 2 bytes it wrapped in 3.6 hours at the Forth app
+rate limit, faster than the 7-day store-and-forward window — but nothing
+yet checks it on receipt.
 
 ### A7 — Duplicate address
 
@@ -154,8 +157,8 @@ The airtime argument, at 2.4 kbps (3.33 ms/byte, worst case):
 
 | Packet | Now | With a 64-byte signature |
 |---|---|---|
-| Short message, 40B payload | 59B → 197ms | 123B → 410ms (**+108%**) |
-| Full-size `ROUTE`, 255B payload | 274B → 913ms | 338B → 1127ms (+23%) |
+| Short message, 40B payload | 61B → 203ms | 125B → 417ms (**+105%**) |
+| Full-size `ROUTE`, 255B payload | 276B → 920ms | 340B → 1133ms (+23%) |
 
 Signing every packet costs a short message more than double its airtime, in
 a band where airtime is the scarcest resource and is scarcest exactly when
@@ -174,7 +177,7 @@ errors, not for security, and this ordering keeps it that way.
 
 ### D4 — Two new packet types for key distribution
 
-- **`IDENT` 0x05** — a self-signed record binding an address to a public key. 4B address + 32B key + 64B signature = 100B payload, ~397ms on air. Broadcast on join and in response to a request.
+- **`IDENT` 0x05** — a self-signed record binding an address to a public key. 4B address + 32B key + 64B signature = 100B payload, ~403ms on air. Broadcast on join and in response to a request.
 - **`IDENT_REQ` 0x06** — asks for the key belonging to an address. 4B payload.
 
 Keys are not carried in ordinary packets. A node that receives a signed
@@ -216,13 +219,16 @@ Actually detecting the blackhole needs end-to-end evidence, such as whether
 traffic routed via a neighbour ever produces an ACK. That is unspecified
 work.
 
-**Replay is bounded, not solved.** A per-source sliding window over `SEQ`,
-persisted across reboots alongside the pin store, rejects duplicates and
-old sequence numbers. But `SEQ` wraps at 65536, clocks are not synchronised
-(the Terminal has a DS3231; the Adapter has no RTC at all), and a disaster
-network cannot assume time sync. For `ROUTE` the 60s cadence and the
-3-interval staleness rule bound the value of a replay to one advertisement
-window. For `MSG` the window is weaker.
+**Replay is bounded, not solved.** `SEQ` is now 4 bytes and no longer wraps
+in the life of the hardware, which removes the objection that made this
+unfixable. What remains is that the mechanism is unspecified: a per-source
+highest-seen value with a sliding bitmap, persisted alongside the pin store,
+and a decision about what happens across a receiver reboot. If that state is
+lost on reboot, the receiver re-learns the sender's counter from the next
+legitimate packet and rejects anything below it — so the exposure is limited
+to whatever the attacker can inject between reboot and that packet, which is
+small but not zero. Clocks cannot help here: the Terminal has a DS3231, the
+Adapter has no RTC at all, and a disaster network cannot assume time sync.
 
 **Availability is not addressed.** Signing does nothing about jamming, and
 per-neighbour quotas limit queue exhaustion without preventing an attacker
@@ -232,13 +238,13 @@ from spending their own airtime to make everyone else's worse.
 
 `ROUTE` does not scale, independently of anything security-related.
 
-A full-size advertisement occupies the channel for ~913ms. At the specified
+A full-size advertisement occupies the channel for ~920ms. At the specified
 60s interval:
 
 | Neighbours | Channel used by routing | With signatures |
 |---|---|---|
-| 10 | 15.2% | 18.8% |
-| 20 | 30.4% | 37.6% |
+| 10 | 15.3% | 18.9% |
+| 20 | 30.7% | 37.8% |
 
 An apartment building on one distribution segment can easily reach twenty
 nodes. Signatures add 23% relative — they are not the problem. The 60s
@@ -250,7 +256,7 @@ than full-table advertisements, or a smaller table.
 
 1. **First-contact hardening.** Is there a practical out-of-band step — a fingerprint shown on screen, compared at the door — that fits the disaster use case rather than assuming calm conditions?
 2. **Blackhole detection.** Is end-to-end ACK evidence worth its complexity at this scale, or is attributability enough?
-3. **`SEQ` width.** Two bytes was sized for duplicate suppression, not for anti-replay. Widening it is a wire-format change and should be decided before the format is frozen, not after.
+3. ~~**`SEQ` width.**~~ Settled: 4 bytes, see [`protocol.md`](protocol.md) "`SEQ` is 4 bytes". Two bytes wrapped in 3.6 hours at the Forth app rate limit against a 7-day store-and-forward window, which broke ordering before it broke anti-replay. What is still unspecified is the *receiving* side — a highest-seen value and a sliding bitmap per source, and how much of it survives a reboot.
 4. **Encryption.** Once every node has an Ed25519 key, X25519 key agreement is a small addition and would close the confidentiality gap. Deliberately not in this pass, but the key infrastructure here is most of the prerequisite.
 
 ---

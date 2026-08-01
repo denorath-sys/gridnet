@@ -10,17 +10,17 @@ Nothing here is implemented.
 
 ## The problem
 
-A full-size `ROUTE` advertisement is 255 bytes of payload — 274 bytes on
+A full-size `ROUTE` advertisement is 255 bytes of payload — 276 bytes on
 air with preamble, header and CRC — which at 2.4 kbps occupies the channel
-for **913 ms**. Every device broadcasts its own full table every 60
+for **920 ms**. Every device broadcasts its own full table every 60
 seconds.
 
 | Nodes on the segment | Channel consumed by routing alone |
 |---|---|
-| 5 | 7.6% |
-| 10 | 15.2% |
-| 20 | **30.4%** |
-| 30 | 45.7% |
+| 5 | 7.7% |
+| 10 | 15.3% |
+| 20 | **30.7%** |
+| 30 | 46.0% |
 
 An apartment building on one distribution segment reaches twenty nodes
 easily. CSMA/CA does not degrade gracefully at that offered load — it
@@ -29,7 +29,7 @@ is competing with every other one. Routing overhead alone would make the
 network unusable at exactly the density the project is designed for.
 
 Adding signatures (see [`threat-model.md`](threat-model.md)) takes 20 nodes
-from 30.4% to 37.6%. **Signatures are not the problem.** A 255-byte table
+from 30.7% to 37.8%. **Signatures are not the problem.** A 255-byte table
 broadcast every 60 seconds on a 2.4 kbps link is.
 
 ## The assumption nobody wrote down
@@ -79,7 +79,7 @@ rather than failing — see "If the assumption is wrong".
 Every transmission on the segment is heard by every node on the segment.
 A node that receives any packet already knows the transmitter is one hop
 away. **That information costs zero airtime, and the current design pays
-913 ms per node per minute to re-derive it.**
+920 ms per node per minute to re-derive it.**
 
 So: any received packet marks its sender as a one-hop neighbour, with a
 last-heard time. No routing traffic is involved.
@@ -104,12 +104,12 @@ bit 6 clear. No new header field, no bytes spent.
 Passive discovery only finds nodes that transmit. A silent node still has to
 be reachable, so it announces itself.
 
-**`BEACON` 0x07** — header only, no payload. 19 bytes on air unsigned; 83
-bytes signed, which is 277 ms.
+**`BEACON` 0x07** — header only, no payload. 21 bytes on air unsigned; 85
+bytes signed, which is 283 ms.
 
 It is signed because a forged beacon is a cheap denial attack: it makes
 every node believe an absent address is present, so traffic is sent to it,
-never acknowledged, and retried. The signature is 64 bytes on a 19-byte
+never acknowledged, and retried. The signature is 64 bytes on a 21-byte
 packet — a terrible ratio, and affordable only because the interval is long.
 
 **Interval: 300 s, suppressed if the node has transmitted any unrelayed
@@ -159,21 +159,21 @@ beacon is actually transmitted:
 
 | | Current | Redesigned |
 |---|---|---|
-| Beacons | — | 20 × 277 ms / 300 s = **1.84%** |
-| `ROUTE` | 20 × 913 ms / 60 s = **30.4%** | 0% (nothing non-audible to advertise) |
-| **Total** | **30.4%** | **1.84%** |
+| Beacons | — | 20 × 283 ms / 300 s = **1.89%** |
+| `ROUTE` | 20 × 920 ms / 60 s = **30.7%** | 0% (nothing non-audible to advertise) |
+| **Total** | **30.7%** | **1.89%** |
 
 A **16× reduction**, and the realistic figure is lower still because active
 nodes suppress their beacons.
 
 Degraded case — each node cannot hear five of the other nineteen, so each
-advertises five entries (108 bytes signed, 360 ms, every 600 s):
+advertises five entries (110 bytes signed, 367 ms, every 600 s):
 
 | | |
 |---|---|
-| Beacons | 1.84% |
-| `ROUTE` | 20 × 360 ms / 600 s = 1.20% |
-| **Total** | **3.04%** |
+| Beacons | 1.89% |
+| `ROUTE` | 20 × 367 ms / 600 s = 1.22% |
+| **Total** | **3.11%** |
 
 Still an order of magnitude better than the current design's best case.
 
@@ -206,9 +206,20 @@ The format is not frozen, and these should land before it is:
 | New type `BEACON` 0x07 | new code, no format change |
 | `hop_count` 16 = unreachable | none, field is already a byte |
 | `ROUTE` semantics: non-audible destinations only | none |
+| `ROUTE` payload is a bare `RouteEntry[]` | **−7 bytes** |
+| `SEQ` 2B → 4B | +2 bytes |
 
-Nothing here widens a packet. The one open wire-format question remains
-`SEQ`'s width, raised in the threat model and still unanswered.
+The `SEQ` widening is the one change that costs anything, and it is settled
+rather than open — see [`protocol.md`](protocol.md) "`SEQ` is 4 bytes". At
+16 bits the counter wraps in 3.6 hours at the Forth app rate limit, while
+store-and-forward retains messages for 7 days, so a stored message can
+outlive the counter that identifies it. Every figure in this document
+already includes the wider header.
+
+Removing the `RoutePacket` wrapper gives most of it back: that struct
+restated `type`, `src` and `seq` from the header, so a `ROUTE` packet pays
++2 for `SEQ` and −7 for the wrapper, and comes out 5 bytes smaller than
+before.
 
 ## Open questions
 
