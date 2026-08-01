@@ -89,6 +89,13 @@ Every device always includes itself at `hop_count` 0. On receipt, a device compa
 
 Hop counts are capped at 15 (RIP-style "infinity"); entries at or above the cap are dropped rather than propagated further, bounding runaway counts across a brief segment partition/reconnect. An entry not refreshed within 3 advertisement intervals (180s) is considered stale and dropped from that device's own next advertisement — the usual "3 missed heartbeats" convention.
 
+> ⚠️ **This section does not scale and is being replaced.** At the 60s
+> interval below, twenty nodes on one segment spend 30.4% of the channel on
+> routing alone — before signatures. [`routing.md`](routing.md) works out why
+> and redesigns it around the fact that a PLC segment is a broadcast domain,
+> where one-hop neighbours can be learned passively at zero airtime cost.
+> The description below is the current specification, not the intended one.
+
 Advertisement interval: 60 seconds. Deliberately long: a full table (up to 255 bytes of payload) costs meaningfully more airtime than a 9-byte heartbeat on a 2.4–9.6kbps link — at 2.4kbps, one full-size ROUTE broadcast occupies the channel for roughly 900ms, so every device doing this too often would eat directly into the bandwidth available for MSG traffic. Routing information is not time-critical: a stale hop count costs an extra relay, not a lost packet.
 
 ## Automatic Channel Selection

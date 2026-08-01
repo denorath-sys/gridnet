@@ -269,6 +269,15 @@ It is also explicit about what authentication does *not* fix — a signed
 route advertisement proves who said it, not that the route exists — and
 about what stays out of scope: device theft, traffic analysis and jamming.
 
+**`ROUTE` does not scale, independently of security.** Twenty nodes on one
+distribution segment would spend 30.4% of a 2.4 kbps channel on routing
+advertisements alone. [`docs/routing.md`](docs/routing.md) redesigns it
+around a property the original missed — a PLC segment is a broadcast domain,
+so one-hop neighbours can be learned passively at zero airtime cost — which
+takes the same case to 1.84%. That document also states, for the first time
+in this project, what topology the network is assumed to have, and flags
+that the assumption has never been measured.
+
 **Duplicate addresses are not detected.** Addresses are self-assigned with
 no registry, and `docs/protocol.md` currently attributes collision
 detection to CSMA/CA. That is a media-access mechanism — it detects a busy
@@ -296,6 +305,7 @@ gridnet/
 │   ├── protocol.md            (full protocol stack)
 │   ├── firmware-arch.md       (Zephyr + Forth VM)
 │   ├── threat-model.md        (adversary scope, attacks, auth decisions)
+│   ├── routing.md             (why ROUTE doesn't scale, and the redesign)
 │   ├── electrical-safety.md   (CENELEC compliance)
 │   ├── plc-adapter-power.md   (adapter power architecture + EN 50065 analysis)
 │   └── plc-coupling.md        (line coupling network: AN4068 retuned for B+C)
