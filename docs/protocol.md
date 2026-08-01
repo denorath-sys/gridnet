@@ -14,7 +14,7 @@ GRIDNET uses a custom lightweight protocol designed for low-bandwidth, high-late
 | Frequency | 95–140 kHz — the ST7580 covers 9–148 kHz, but Board 1's coupling network is tuned for B+C and changing that means changing four component values ([`plc-coupling.md`](plc-coupling.md)) |
 | Modulation | OFDM / FSK |
 | Typical data rate | 2.4–9.6 kbps |
-| Fallback | ESP32-C3 Wi-Fi 2.4GHz mesh |
+| Second interface | ESP32-C3 Wi-Fi 2.4GHz mesh — not a fallback, see [`channels.md`](channels.md) |
 
 ## Packet Format
 
@@ -125,7 +125,7 @@ entries fit, not the 51 REV 0.5 claimed. Without it, 51 is right.
 
 Every device always includes itself at `hop_count` 0. On receipt, a device compares each entry's (`hop_count` + 1) against its own table and keeps the lower value, recording the sender as `next_hop`. A device discards any incoming entry whose address is its own — the minimal loop-prevention this simplified distance-vector scheme relies on (no split-horizon/poison-reverse).
 
-Hop counts are capped at 15 (RIP-style "infinity"); entries at or above the cap are dropped rather than propagated further, bounding runaway counts across a brief segment partition/reconnect. An entry not refreshed within 3 advertisement intervals (180s) is considered stale and dropped from that device's own next advertisement — the usual "3 missed heartbeats" convention.
+Hop counts are capped at 15 (RIP-style "infinity"); entries at or above the cap are dropped rather than propagated further, bounding runaway counts across a brief segment partition/reconnect. ([`channels.md`](channels.md) replaces this with an accumulated cost — mesh hop 1, PLC hop 4, infinity 64 — because a PLC hop and a mesh hop are not comparable. The cap below is the current specification, not the intended one.) An entry not refreshed within 3 advertisement intervals (180s) is considered stale and dropped from that device's own next advertisement — the usual "3 missed heartbeats" convention.
 
 > ⚠️ **This section does not scale and is being replaced.** At the 60s
 > interval below, twenty nodes on one segment spend 30.7% of the channel on
@@ -136,16 +136,27 @@ Hop counts are capped at 15 (RIP-style "infinity"); entries at or above the cap 
 
 Advertisement interval: 60 seconds. Deliberately long: a full table (up to 255 bytes of payload) costs meaningfully more airtime than a 9-byte heartbeat on a 2.4–9.6kbps link — at 2.4kbps, one full-size ROUTE broadcast occupies the channel for 920ms, so every device doing this too often would eat directly into the bandwidth available for MSG traffic. Routing information is not time-critical: a stale hop count costs an extra relay, not a lost packet.
 
-## Automatic Channel Selection
+## Channel Selection
 
-Priority order, evaluated continuously:
+> ⚠️ **The priority table this section used to carry is withdrawn.** It
+> ranked PLC first and the Wi-Fi mesh second, to be used when the "line
+> [is] damaged or PLC failed". That is the wrong model: the two channels
+> reach different sets of nodes, and neither set contains the other. See
+> [`channels.md`](channels.md).
 
-| Priority | Channel | Condition |
-|---|---|---|
-| 1 | Powerline (PLC) | Line intact — works whether or not the grid is energised |
-| 2 | Wi-Fi Mesh | Line damaged or PLC failed |
+PLC reaches **electrical** neighbours — the same distribution segment, and
+in practice the same phase. The mesh reaches **physical** neighbours —
+adjacent flats, through walls. A node on another phase in the same building
+is often unreachable by PLC and one mesh hop away, which is precisely the
+case a fallback model handles worst.
 
-During a grid outage the adapter keeps using PLC; what changes is where it gets its power, not which channel it uses. See [`plc-adapter-power.md`](plc-adapter-power.md).
+So there is no ranking and no "line damaged" state to detect. A node has two
+routing interfaces, `PLC` and `MESH`, discovers neighbours independently on
+each ([`routing.md`](routing.md)), and chooses per destination by metric. A
+PLC path that stops working simply stops being advertised, and the mesh path
+wins on its own.
+
+During a grid outage the adapter keeps using both; what changes is where it gets its power. See [`plc-adapter-power.md`](plc-adapter-power.md) — and note that on battery the mesh is between two and three orders of magnitude cheaper per bit than PLC, because its radio is already powered for the Terminal link.
 
 ## Operation During a Grid Outage
 

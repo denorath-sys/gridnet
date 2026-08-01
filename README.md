@@ -20,12 +20,15 @@ GRIDNET is an open hardware mesh communication terminal that uses **existing pow
 
 No internet required. No cell towers. No central servers. No accounts.
 
-When grid power fails, the adapter runs from the Terminal's battery over a cable you plug in — the wire is still a conductor whether or not it's energised, so the network keeps working. When the wire itself is damaged, Wi-Fi mesh takes over automatically.
+When grid power fails, the adapter runs from the Terminal's battery over a cable you plug in — the wire is still a conductor whether or not it's energised, so the network keeps working.
+
+The Wi-Fi mesh is not a fallback for the powerline. The two carry to different places: PLC reaches **electrical** neighbours (the same distribution segment, and in practice the same phase), the mesh reaches **physical** ones (adjacent flats, through walls). A neighbour on another phase in the same building is often unreachable over the wire and one mesh hop away. Both run all the time and the router picks per destination — see [`docs/channels.md`](docs/channels.md).
 
 ```
-Normal mode:    [Terminal] ←WiFi→ [PLC Adapter] ←powerline→ [neighbor's adapter] ←WiFi→ [neighbor's Terminal]
-Outage mode:    Grid is down — plug the Terminal into the adapter, network stays alive on battery
-WiFi fallback:  Wire is damaged — ESP32-C3 mesh activates automatically
+Tether:      [Terminal] ←WiFi→ [its own PLC Adapter]      private link to your own modem
+PLC:         [Adapter] ←powerline→ [Adapter]              same segment, same phase
+Mesh:        [Adapter] ←ESP-NOW→ [Adapter]                physically adjacent, any phase
+Outage mode: Grid is down — plug the Terminal into the adapter, network stays alive on battery
 ```
 
 ---
@@ -91,8 +94,8 @@ Separate unit. Plugs directly into any wall outlet (Schuko). Connects to termina
 │   Mesh routing, automatic repeating     │
 ├─────────────────────────────────────────┤
 │           CHANNEL LAYER                 │
-│   Priority 1: Powerline (PLC)           │
-│   Priority 2: Wi-Fi Mesh (wire damaged) │
+│   Two interfaces, chosen per            │
+│   destination by cost — not ranked      │
 ├─────────────────────────────────────────┤
 │           PHYSICAL LAYER                │
 │   ST7580 OFDM/FSK, EN 50065-1 limited   │
@@ -308,6 +311,7 @@ gridnet/
 │   ├── firmware-arch.md       (Zephyr + Forth VM)
 │   ├── threat-model.md        (adversary scope, attacks, auth decisions)
 │   ├── routing.md             (why ROUTE doesn't scale, and the redesign)
+│   ├── channels.md            (PLC vs mesh: what each actually reaches)
 │   ├── electrical-safety.md   (CENELEC compliance)
 │   ├── plc-adapter-power.md   (adapter power architecture + EN 50065 analysis)
 │   └── plc-coupling.md        (line coupling network: AN4068 retuned for B+C)

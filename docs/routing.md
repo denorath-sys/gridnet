@@ -59,13 +59,15 @@ Two things follow, and the second one is uncomfortable.
    protocol is the wrong shape for a medium where the common case is "one
    hop to everyone".
 
-2. **The powerline reach of this network is one distribution segment.**
-   "Communicate with your neighbourhood over the power grid" is true within
-   the transformer's service area and not beyond it. Reaching a further
-   segment needs the Wi-Fi mesh, which the README currently frames only as a
-   fallback for damaged wire — not as the mechanism that joins segments
-   together. That framing needs revisiting on its own; it is a premise
-   question, not a routing one.
+2. **The powerline reach of this network is one distribution segment, and
+   in practice one phase within it.** "Communicate with your neighbourhood
+   over the power grid" is true inside the transformer's service area and not
+   beyond it — and LV distribution being three-phase, a single building can
+   partition into up to three groups that barely hear each other. Reaching
+   any of those needs the Wi-Fi mesh, which the README frames as a fallback
+   for damaged wire rather than as the thing that joins what the wire cannot.
+   [`channels.md`](channels.md) takes that up: the two channels reach
+   different sets of nodes, and neither set contains the other.
 
 **This assumption is unvalidated.** No hardware exists, so nobody has
 measured what fraction of a real segment actually hears each other. The
@@ -148,9 +150,29 @@ Instead of re-broadcasting a full table on a short timer:
 - **Split horizon**, per interface: routes learned on the PLC segment are
   not advertised back onto it. With one broadcast domain per interface this
   is simple — omit them — and it removes the classic two-node routing loop.
-- **Route poisoning:** when a route dies, advertise it immediately at
-  `hop_count` 16 (infinity) rather than waiting for it to age out. Valid hop
-  counts stay 0–15, matching the existing RIP-style cap.
+  There are genuinely two interfaces for this to apply to: see
+  [`channels.md`](channels.md).
+- **Route poisoning:** when a route dies, advertise it immediately at the
+  infinity value rather than waiting for it to age out.
+
+### R6 — The metric is a cost, not a hop count
+
+A PLC hop and a mesh hop differ by roughly two orders of magnitude in both
+throughput and energy, so counting them equally would make the router prefer
+a slow, expensive one-hop PLC path over a fast, cheap two-hop mesh path.
+`RouteEntry`'s existing byte is reinterpreted as an accumulated cost — no
+format change, still 5 bytes per entry:
+
+| | Cost |
+|---|---|
+| Mesh hop | 1 |
+| PLC hop | 4 |
+| Unreachable (poison) | 64 |
+
+Valid costs are 0–63: fifteen PLC hops or sixty-three mesh hops before the
+loop-prevention cap bites. The reasoning behind 4:1, and why it is
+deliberately more conservative than the throughput ratio would suggest, is
+in [`channels.md`](channels.md).
 
 ## What it costs
 
@@ -204,7 +226,7 @@ The format is not frozen, and these should land before it is:
 | `TYPE` bit 6 = RELAYED | 0 bytes |
 | `TYPE` bit 7 = SIGNED (from the threat model) | 0 bytes |
 | New type `BEACON` 0x07 | new code, no format change |
-| `hop_count` 16 = unreachable | none, field is already a byte |
+| `hop_count` byte becomes a cost, infinity = 64 | none, field is already a byte |
 | `ROUTE` semantics: non-audible destinations only | none |
 | `ROUTE` payload is a bare `RouteEntry[]` | **−7 bytes** |
 | `SEQ` 2B → 4B | +2 bytes |
@@ -225,7 +247,7 @@ before.
 
 1. **Does a segment really behave as one broadcast domain?** The whole design rests on it. Needs a link-budget survey on real hardware.
 2. **Is 300 s the right beacon interval?** It sets worst-case liveness detection at 900 s (three missed beacons). Shorter costs airtime linearly; longer delays noticing a node that has gone away silently.
-3. **How do segments actually join?** If PLC stops at the transformer, the Wi-Fi mesh is not a damage fallback but the inter-segment bridge, and the README describes it as the former. A premise question worth settling before the routing layer is built on either answer.
+3. ~~**How do segments actually join?**~~ Settled in [`channels.md`](channels.md): two interfaces on one router, chosen per destination by cost, with no ranking and no "line damaged" state to detect. What remains open there is the measurement — cross-phase attenuation and real mesh reach.
 4. **Does relay election need to exist?** On a broadcast domain where all nodes hear a flood, "each device repeats once" means twenty simultaneous retransmissions of one packet. That is a separate scaling problem in `protocol.md`'s flooding rule, not addressed here.
 
 ---
