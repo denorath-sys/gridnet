@@ -38,9 +38,17 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
     python3 build_pcb.py
 
     echo "== attempt $attempt/$ATTEMPTS: autorouting =="
+    # The escape areas (build_pcb.ESCAPE_AREAS) forbid nothing, but KiCad's
+    # Specctra exporter writes every rule area as a keepout regardless, which
+    # would fence Freerouting out of the one region the escape rule exists to
+    # open up. They come off this in-memory copy only; the saved board keeps
+    # them for DRC.
     python3 -c "
-import pcbnew
+import pcbnew, build_pcb
 board = pcbnew.LoadBoard('$BOARD')
+names = {build_pcb.escape_area_name(ref) for ref in build_pcb.ESCAPE_AREAS}
+for zone in [z for z in board.Zones() if z.GetIsRuleArea() and z.GetZoneName() in names]:
+    board.Delete(zone)
 pcbnew.ExportSpecctraDSN(board, '$WORK/board.dsn')
 "
     # Keep signals off the two plane layers. KiCad writes every copper layer as

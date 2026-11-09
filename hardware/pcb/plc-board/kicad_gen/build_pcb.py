@@ -168,6 +168,97 @@ NETCLASSES: Dict[str, Tuple[float, float, List[str]]] = {
     "Power_5V": (0.4, 0.2, ["+5V", "/PSU_5V", "/USB_5V"]),
 }
 
+# Fine-pitch escape: a tighter rule, but only around these parts.
+#
+# U4 is a 48-pin 0.5mm-pitch QFN with power pins interleaved among its
+# signals, and at 0.2mm track and 0.2mm clearance its signals cannot get out.
+# Pins 4 and 5 (JTAG) sit between pin 3's +5V fanout via and pin 6's GND via,
+# whose copper edges are 0.9mm apart; two 0.2mm tracks need 1.0mm to pass
+# (two widths, three clearances). They need 0.75mm at 0.15/0.15. Adjacent
+# signals cannot fan out at 45 degrees either: 0.5mm pitch leaves 0.354mm
+# between them, against 0.4mm needed at 0.2/0.2 and 0.3mm at 0.15/0.15. Every
+# routing attempt at 0.2mm ended with one to four of U4's signals unrouted,
+# and only ever U4's.
+#
+# So inside a named rule area around each part listed here, clearance drops
+# to ESCAPE_CLEARANCE (a custom rule in plc-board.kicad_dru), and the nets on
+# the part's signal pins route at ESCAPE_WIDTH (the "Escape" netclass, whose
+# clearance stays 0.2mm everywhere else).
+ESCAPE_AREAS = {"U4": 3.0}   # ref -> margin in mm beyond its courtyard
+ESCAPE_WIDTH = 0.15
+ESCAPE_CLEARANCE = 0.15
+# Kept at the Default width: these carry the PA's current, not a signal. The
+# ST7580's I(VCC)-vs-I(PA_OUT) curve runs to ~500mA, PA_OUT drives the line
+# coupling, and VSSA (the exposed pad's net) is where that current returns.
+ESCAPE_EXCLUDE = ("/ST_PA_OUT", "/ST_VSSA")
+DRU_PATH = "../plc-board.kicad_dru"
+
+
+def escape_area_name(ref: str) -> str:
+    return f"{ref}_ESCAPE"
+
+
+def escape_nets(board: "pcbnew.BOARD") -> List[str]:
+    """Nets on ESCAPE_AREAS parts' pins that no other netclass claims."""
+    claimed = {net for _w, _c, nets in NETCLASSES.values() for net in nets}
+    planed = {name for name, _layer in PLANES}
+    found = set()
+    for ref in ESCAPE_AREAS:
+        fp = board.FindFootprintByReference(ref)
+        for pad in fp.Pads():
+            name = pad.GetNetname()
+            if name and name not in claimed and name not in planed and name not in ESCAPE_EXCLUDE:
+                found.add(name)
+    return sorted(found)
+
+
+def add_escape_areas(board: "pcbnew.BOARD") -> int:
+    """A named rule area per ESCAPE_AREAS part, forbidding nothing.
+
+    It exists only to be named by the custom DRC rule; every other piece of
+    this toolchain that reads rule areas checks what they forbid rather than
+    treating any rule area as a keepout.
+    """
+    for ref, margin in ESCAPE_AREAS.items():
+        boxes = [box for r, box in courtyard_boxes(board) if r == ref]
+        if not boxes:
+            raise SystemExit(f"{ref} has no courtyard -- cannot size its escape area")
+        box = boxes[0]
+        left, top = box.GetLeft() / 1e6 - margin, box.GetTop() / 1e6 - margin
+        right, bottom = box.GetRight() / 1e6 + margin, box.GetBottom() / 1e6 + margin
+        zone = pcbnew.ZONE(board)
+        zone.SetIsRuleArea(True)
+        zone.SetDoNotAllowTracks(False)
+        zone.SetDoNotAllowVias(False)
+        zone.SetDoNotAllowPads(False)
+        zone.SetDoNotAllowCopperPour(False)
+        zone.SetDoNotAllowFootprints(False)
+        layers = pcbnew.LSET()
+        for layer in ALL_COPPER:
+            layers.AddLayer(layer)
+        zone.SetLayerSet(layers)
+        outline = zone.Outline()
+        outline.NewOutline()
+        for x, y in ((left, top), (right, top), (right, bottom), (left, bottom)):
+            outline.Append(mm(x), mm(y))
+        zone.SetZoneName(escape_area_name(ref))
+        board.Add(zone)
+    return len(ESCAPE_AREAS)
+
+
+def write_escape_rules() -> None:
+    """The custom DRC rule behind ESCAPE_AREAS."""
+    rules = ["(version 1)"]
+    for ref in ESCAPE_AREAS:
+        rules.append(
+            f'(rule "{ref} fine-pitch escape"\n'
+            f'  (condition "A.intersectsArea(\'{escape_area_name(ref)}\')")\n'
+            f"  (constraint clearance (min {ESCAPE_CLEARANCE}mm)))"
+        )
+    with open(DRU_PATH, "w", encoding="utf-8") as f:
+        f.write("\n".join(rules) + "\n")
+    print(f"wrote {DRU_PATH} ({len(ESCAPE_AREAS)} escape rules)")
+
 # Reference-designator text nudges, in mm relative to where the footprint puts
 # it by default. Only for the few that land on a neighbour's silkscreen or on
 # exposed copper in this layout -- both are DRC warnings, and both mean the
@@ -232,7 +323,7 @@ def parse_netlist(path: str) -> Tuple[Dict[str, CompInfo], Dict[str, List[Tuple[
     return comps, nets
 
 
-def write_project_netclasses() -> None:
+def write_project_netclasses(extra: Dict[str, Tuple[float, float, List[str]]] = None) -> None:
     """Write NETCLASSES into ../plc-board.kicad_pro.
 
     KiCad 7+ stores netclasses in the project file rather than the board, and
@@ -246,7 +337,7 @@ def write_project_netclasses() -> None:
     default = next(c for c in settings["classes"] if c["name"] == "Default")
     classes = [default]
     patterns = []
-    for name, (width, clearance, nets) in NETCLASSES.items():
+    for name, (width, clearance, nets) in {**NETCLASSES, **(extra or {})}.items():
         cls = dict(default)
         cls.update(name=name, track_width=width, clearance=clearance,
                    priority=len(classes))
@@ -261,7 +352,7 @@ def write_project_netclasses() -> None:
     settings["netclass_patterns"] = patterns
     with open(PROJECT_PATH, "w", encoding="utf-8") as f:
         json.dump(project, f, indent=2)
-    print(f"wrote {PROJECT_PATH} ({len(NETCLASSES)} netclasses, {len(patterns)} net assignments)")
+    print(f"wrote {PROJECT_PATH} ({len(classes) - 1} netclasses, {len(patterns)} net assignments)")
 
 
 def add_gnd_zones(board: "pcbnew.BOARD", gnd_net: "pcbnew.NETINFO_ITEM") -> None:
@@ -717,9 +808,9 @@ def add_stitching_vias(board: "pcbnew.BOARD", gnd_net: "pcbnew.NETINFO_ITEM") ->
 
     # Rule areas -- the isolation band and the antenna keepout -- forbid vias
     # outright. DRC reports a via inside one as items_not_allowed.
-    rule_areas = [z for z in board.Zones() if z.GetIsRuleArea()]
+    rule_areas = [z for z in board.Zones() if z.GetIsRuleArea() and z.GetDoNotAllowVias()]
     for fp in board.GetFootprints():
-        rule_areas += [z for z in fp.Zones() if z.GetIsRuleArea()]
+        rule_areas += [z for z in fp.Zones() if z.GetIsRuleArea() and z.GetDoNotAllowVias()]
 
     # Copper obstacles are tested as (start, end, half-width) segments rather
     # than bounding boxes. A diagonal track's bounding box is a poor stand-in
@@ -1001,8 +1092,13 @@ STACKUP = {
     "thickness_mm": 1.6,
     "copper_weight_outer_oz": 1,
     "copper_weight_inner_oz": 0.5,
-    "min_track_mm": 0.2,
-    "min_clearance_mm": 0.2,
+    # The process floor, not the design rule: the Default netclass is still
+    # 0.2mm/0.2mm and governs everything outside ESCAPE_AREAS. This is 0.15
+    # so the U4 escape rule below is legal at all -- KiCad holds every rule,
+    # custom ones included, to these minimums. JLCPCB's standard four-layer
+    # process goes to 0.09mm, so 0.15mm is not a special order.
+    "min_track_mm": 0.15,
+    "min_clearance_mm": 0.15,
     "min_via_diameter_mm": 0.6,
     "min_via_drill_mm": 0.3,
     "min_hole_to_hole_mm": 0.25,
@@ -1304,13 +1400,16 @@ def main() -> None:
     # After placement, because the antenna keepout's geometry comes from U2.
     keepouts = add_keepout_zones(board)
     fanout = add_power_fanout(board, net_objs)
+    escape = add_escape_areas(board)
+    escape_netclass = {"Escape": (ESCAPE_WIDTH, 0.2, escape_nets(board))}
 
 
     out_path = "../plc-board.kicad_pcb"
     board.Save(out_path)
-    print(f"wrote {out_path} ({len(comps)} components, {len(nets)} nets, {thermal} thermal vias, {keepouts} keepout zones, {fanout} power fanouts)")
+    print(f"wrote {out_path} ({len(comps)} components, {len(nets)} nets, {thermal} thermal vias, {keepouts} keepout zones, {fanout} power fanouts, {escape} escape areas)")
 
-    write_project_netclasses()
+    write_project_netclasses(escape_netclass)
+    write_escape_rules()
 
 
 if __name__ == "__main__":

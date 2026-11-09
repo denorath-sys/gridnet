@@ -67,7 +67,10 @@ LAYERS = (pcbnew.F_Cu, pcbnew.B_Cu)
 # NETINFO_ITEM.GetNetClass() as a bare SwigPyObject with no accessors, so the
 # rules cannot be read back off the board; importing the source of truth is
 # both simpler and harder to get out of step.
-from build_pcb import NETCLASSES, PLANES  # noqa: E402
+from build_pcb import (  # noqa: E402
+    ESCAPE_AREAS, ESCAPE_CLEARANCE, ESCAPE_WIDTH, NETCLASSES, PLANES,
+    escape_area_name, escape_nets,
+)
 
 NET_RULES = {
     net: (width, clearance)
@@ -181,6 +184,17 @@ class Grid:
 
     def __init__(self, board: "pcbnew.BOARD", width_mm: float, height_mm: float) -> None:
         self.board = board
+        # The U4 escape areas (see build_pcb.ESCAPE_AREAS): inside one,
+        # clearance is ESCAPE_CLEARANCE, and the part's signal nets route at
+        # ESCAPE_WIDTH everywhere.
+        self.escape_rects = []
+        names = {escape_area_name(ref) for ref in ESCAPE_AREAS}
+        for zone in board.Zones():
+            if zone.GetIsRuleArea() and zone.GetZoneName() in names:
+                box = zone.Outline().BBox()
+                self.escape_rects.append((box.GetLeft() / 1e6, box.GetTop() / 1e6,
+                                          box.GetRight() / 1e6, box.GetBottom() / 1e6))
+        self.escape_nets = set(escape_nets(board))
         self.nx = int(width_mm / GRID) + 1
         self.ny = int(height_mm / GRID) + 1
         self.width_mm = width_mm
@@ -235,7 +249,15 @@ class Grid:
         net = self.board.FindNet(net_code)
         if net is None:
             return TRACK_WIDTH, CLEARANCE
+        if net.GetNetname() in self.escape_nets:
+            return ESCAPE_WIDTH, CLEARANCE
         return NET_RULES.get(net.GetNetname(), (TRACK_WIDTH, CLEARANCE))
+
+    def in_escape(self, rect: Tuple[float, float, float, float]) -> bool:
+        """Does this bounding box touch an escape area?"""
+        left, top, right, bottom = rect
+        return any(left <= r and right >= l and top <= b and bottom >= t
+                   for l, t, r, b in self.escape_rects)
 
     def build(self, net_code: int) -> Tuple[List["np.ndarray"], List["np.ndarray"]]:
         """Return (blocked-for-track, blocked-for-via) grids.
@@ -250,11 +272,21 @@ class Grid:
         blocked = [self._blank(), self._blank()]
         via_blocked = [self._blank(), self._blank()]
 
+        # Inside an escape area the clearance to an obstacle is the escape
+        # rule's. Decided per obstacle, by whether it touches the area: the
+        # DRC rule matches when either item does, so this is the conservative
+        # half of it.
+        def radii(rect) -> Tuple[float, float]:
+            clr = min(clearance, ESCAPE_CLEARANCE) if self.in_escape(rect) else clearance
+            return width / 2 + clr, VIA_DIAMETER / 2 + clr
+
         def obstacle(layer_idx: Optional[int], a, b, half_width: float) -> None:
+            t_radius, v_radius = radii((min(a[0], b[0]) - half_width, min(a[1], b[1]) - half_width,
+                                        max(a[0], b[0]) + half_width, max(a[1], b[1]) + half_width))
             targets = [layer_idx] if layer_idx is not None else [0, 1]
             for idx in targets:
-                self._stamp(blocked[idx], a, b, half_width + track_radius)
-                self._stamp(via_blocked[idx], a, b, half_width + via_radius)
+                self._stamp(blocked[idx], a, b, half_width + t_radius)
+                self._stamp(via_blocked[idx], a, b, half_width + v_radius)
 
         for item in self.board.GetTracks():
             is_via = isinstance(item, pcbnew.PCB_VIA)
@@ -287,9 +319,10 @@ class Grid:
                 on_front = pad.IsOnLayer(pcbnew.F_Cu)
                 on_back = pad.IsOnLayer(pcbnew.B_Cu)
                 layers = [0] if on_front and not on_back else ([1] if on_back and not on_front else [0, 1])
+                t_radius, v_radius = radii(rect)
                 for idx in layers:
-                    self._stamp_box(blocked[idx], rect, track_radius)
-                    self._stamp_box(via_blocked[idx], rect, via_radius)
+                    self._stamp_box(blocked[idx], rect, t_radius)
+                    self._stamp_box(via_blocked[idx], rect, v_radius)
 
         # Rule areas -- the isolation barrier, and both antenna keepouts.
         #
@@ -310,6 +343,8 @@ class Grid:
             box = zone.Outline().BBox()
             rect = (box.GetLeft() / 1e6, box.GetTop() / 1e6,
                     box.GetRight() / 1e6, box.GetBottom() / 1e6)
+            # By what the area forbids, not by being a rule area: the escape
+            # areas forbid nothing and exist only to be named by a DRC rule.
             for idx in range(2):
                 # Half the track, not the clearance. A keepout is a boundary,
                 # not a conductor: copper may come right up to its edge, it
@@ -319,8 +354,10 @@ class Grid:
                 # 30.92 and made that pad unroutable by construction. /AC_N
                 # failed identically on every attempt of two runs before this
                 # was found.
-                self._stamp_box(blocked[idx], rect, width / 2)
-                self._stamp_box(via_blocked[idx], rect, VIA_DIAMETER / 2)
+                if zone.GetDoNotAllowTracks():
+                    self._stamp_box(blocked[idx], rect, width / 2)
+                if zone.GetDoNotAllowVias():
+                    self._stamp_box(via_blocked[idx], rect, VIA_DIAMETER / 2)
 
         # Keep off the board edge -- measured from the copper's edge, and from
         # the board's real outline.
@@ -459,7 +496,7 @@ class Grid:
         return None
 
 
-def path_to_tracks(board: "pcbnew.BOARD", path: Sequence[Cell], net: "pcbnew.NETINFO_ITEM") -> int:
+def path_to_tracks(board: "pcbnew.BOARD", grid: "Grid", path: Sequence[Cell], net: "pcbnew.NETINFO_ITEM") -> int:
     """Turn a simplified path into copper: a track per leg, a via per layer change."""
     added = 0
 
@@ -483,7 +520,7 @@ def path_to_tracks(board: "pcbnew.BOARD", path: Sequence[Cell], net: "pcbnew.NET
             track = pcbnew.PCB_TRACK(board)
             track.SetStart(point(previous))
             track.SetEnd(point(cell))
-            width, _clearance = NET_RULES.get(net.GetNetname(), (TRACK_WIDTH, CLEARANCE)) if net else (TRACK_WIDTH, CLEARANCE)
+            width, _clearance = grid.rules_for(net.GetNetCode()) if net else (TRACK_WIDTH, CLEARANCE)
             track.SetWidth(pcbnew.FromMM(width))
             track.SetLayer(LAYERS[cell[2]])
             track.SetNet(net)
@@ -509,7 +546,7 @@ def route_pad_chain(board: "pcbnew.BOARD", grid: "Grid", net: "pcbnew.NETINFO_IT
         path = grid.route(here, start_layers, target, target_layers, net.GetNetCode())
         if path is None:
             return False
-        total += path_to_tracks(board, path, net)
+        total += path_to_tracks(board, grid, path, net)
         current = nxt
     return True
 
@@ -696,7 +733,7 @@ def drop_via_to_plane(
             path = grid.route(origin, origin_layers, (x, y), list(range(len(LAYERS))), net.GetNetCode())
             if path is None:
                 continue
-            added = path_to_tracks(board, path, net)
+            added = path_to_tracks(board, grid, path, net)
             via = pcbnew.PCB_VIA(board)
             via.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(y)))
             via.SetFrontWidth(pcbnew.FromMM(VIA_DIAMETER))
@@ -821,7 +858,7 @@ def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -
 
     path = grid.route((x1, y1), start_layers, (x2, y2), target_layers, net_code)
     if path is not None:
-        added = path_to_tracks(board, path, net)
+        added = path_to_tracks(board, grid, path, net)
         print(
             f"finished {net.GetNetname()} ({x1:.2f},{y1:.2f}) -> ({x2:.2f},{y2:.2f}): "
             f"{added} segments/vias"
