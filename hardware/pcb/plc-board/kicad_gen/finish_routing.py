@@ -469,7 +469,6 @@ def route_pad_chain(board: "pcbnew.BOARD", grid: "Grid", net: "pcbnew.NETINFO_IT
             return False
         total += path_to_tracks(board, path, net)
         current = nxt
-    print(f"re-routed {net.GetNetname()} from scratch: {total} segments/vias")
     return True
 
 
@@ -534,6 +533,13 @@ def rip_up_and_reroute(
         for track in doomed:
             board.Add(track)
         return False
+    # Reported only now, once nothing is going to be undone. It used to be
+    # printed per net as each one routed, so a rip-up that was then rolled
+    # back still logged "re-routed /ST_TMS from scratch" -- twice in one run,
+    # for a net that ended the run unrouted.
+    names = ", ".join(board.FindNet(code).GetNetname() for code in routed)
+    where = f" around ({near[0]:.2f},{near[1]:.2f})" if near is not None else ""
+    print(f"re-routed {names} from scratch{where}")
     return True
 
 
