@@ -1,0 +1,4 @@
+(version 1)
+(rule "U4 fine-pitch escape"
+  (condition "A.intersectsArea('U4_ESCAPE')")
+  (constraint clearance (min 0.15mm)))
