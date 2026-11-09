@@ -117,6 +117,11 @@ PY
         echo "== done =="
         exit 0
     fi
+    # The next attempt's placement overwrites the board, so a failed attempt
+    # is gone unless kept. Set KEEP_FAILED to a directory to keep each one.
+    if [ -n "${KEEP_FAILED:-}" ]; then
+        cp "$BOARD" "$KEEP_FAILED/attempt$attempt.kicad_pcb"
+    fi
     echo "== attempt $attempt/$ATTEMPTS could not be finished; re-routing from scratch =="
 done
 
