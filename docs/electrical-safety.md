@@ -62,10 +62,14 @@ Earlier revisions of this document listed the A-band's users as "Energy
 companies, smart meters, GRIDNET", which was wrong. General-purpose
 equipment is confined to 95–148.5 kHz.
 
-docs/protocol.md still specifies A-band operation throughout and needs
-revisiting. The ST7580 covers both ranges, so this is a configuration and
-documentation question rather than a hardware one — but it is unresolved,
-and it is the single largest open compliance item in the project.
+This is settled. [`protocol.md`](protocol.md) now specifies B (95–125 kHz)
+and C (125–140 kHz), using its CSMA/CA as the access protocol C requires,
+and Board 1's line coupling is tuned for that band
+([`plc-coupling.md`](plc-coupling.md)), so the choice is committed in
+hardware as well as on paper. What remains open is the measurement: no
+EN 50065-1 conformance claim is justified before a conducted-emission
+sweep on a prototype, and harmonic suppression is tighter in B+C than it
+would have been in the A-band.
 
 ### Other regions
 
