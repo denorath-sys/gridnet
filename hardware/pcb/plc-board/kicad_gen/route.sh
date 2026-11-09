@@ -73,8 +73,19 @@ for layer in ("In1.Cu", "In2.Cu"):
 open(path, "w", encoding="utf-8").write(text)
 print("DSN: In1.Cu and In2.Cu marked as power layers")
 PYDSN
-    "$JAVA" -jar "$FREEROUTING_JAR" -de "$WORK/board.dsn" -do "$WORK/board.ses" \
+    # Freerouting hangs at random -- the same DSN that finishes in 17 seconds
+    # on one run sits for ten minutes on the next, writing nothing. Bound it
+    # with FREEROUTING_TIMEOUT, and treat a run that produced no session file
+    # as a failed attempt. This used to fall through: the import loaded
+    # nothing, and the repair router set about routing all 172 nets on its own.
+    rm -f "$WORK/board.ses"
+    timeout "${FREEROUTING_TIMEOUT:-300}" "$JAVA" -jar "$FREEROUTING_JAR" \
+        -de "$WORK/board.dsn" -do "$WORK/board.ses" \
         --gui.enabled=false -mp "$PASSES" 2>&1 | grep -E "session completed" || true
+    if [ ! -s "$WORK/board.ses" ]; then
+        echo "== attempt $attempt/$ATTEMPTS: Freerouting produced no session (hung or failed); next attempt =="
+        continue
+    fi
 
     python3 -c "
 import pcbnew
