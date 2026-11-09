@@ -520,8 +520,6 @@ def add_thermal_vias(board: "pcbnew.BOARD", gnd_net: "pcbnew.NETINFO_ITEM") -> i
 
 # Fine-pitch parts whose power pins get a fanout stub and via at build time.
 FANOUT_PARTS = ("U4",)
-import os
-FANOUT_SKIP_SANDWICHED = os.environ.get("FANOUT_SKIP_SANDWICHED") == "1"  # experiment
 
 
 def add_power_fanout(board: "pcbnew.BOARD", nets: Dict[str, "pcbnew.NETINFO_ITEM"]) -> int:
@@ -657,11 +655,6 @@ def add_power_fanout(board: "pcbnew.BOARD", nets: Dict[str, "pcbnew.NETINFO_ITEM
                 name = run[0].GetNetname()
                 if name not in planed:
                     continue
-                if FANOUT_SKIP_SANDWICHED and len(run) == 1:
-                    idx = edge_pads.index(run[0])
-                    beside = [edge_pads[i].GetNetname() for i in (idx - 1, idx + 1) if 0 <= i < len(edge_pads)]
-                    if len(beside) == 2 and all(n not in planed for n in beside):
-                        continue
                 first, last = run[0].GetPosition(), run[-1].GetPosition()
                 # The stub leaves from the middle of the run: a pad centre for
                 # an odd run, the bridge between the two middle pads for an
