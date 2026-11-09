@@ -796,6 +796,168 @@ def orphan_plane_pads(board: "pcbnew.BOARD") -> List[Tuple["pcbnew.NETINFO_ITEM"
     return found
 
 
+def clear_island_and_stitch(board: "pcbnew.BOARD", grid: "Grid", net: "pcbnew.NETINFO_ITEM", pad: "pcbnew.PAD") -> bool:
+    """via_in_island(), after lifting the few signal segments in the way.
+
+    The island vouches only for its own layer; on the far side a signal can
+    run straight under it -- /ST_CL on B.Cu under U4 pin 33's GND island --
+    and leave no legal via site at all. So the site is chosen first, among
+    the island's points, as the one that costs the fewest segments, and only
+    the segments that actually come within clearance of it are lifted. Their
+    cut ends are ordinary unconnected pairs for the next rounds. Lifting
+    everything near the island instead took 48 segments of eight nets for one
+    via.
+    """
+    code = net.GetNetCode()
+    island = None
+    for zone in board.Zones():
+        if zone.GetIsRuleArea() or zone.GetNetCode() != code:
+            continue
+        for layer in LAYERS:
+            if not (zone.IsOnLayer(layer) and pad.IsOnLayer(layer)):
+                continue
+            polys = zone.GetFilledPolysList(layer)
+            for i in range(polys.OutlineCount()):
+                candidate = pcbnew.SHAPE_POLY_SET()
+                candidate.AddOutline(polys.Outline(i))
+                if candidate.Contains(pad.GetPosition()) or candidate.Collide(pad.GetPosition(), pcbnew.FromMM(0.2)):
+                    island = candidate
+    if island is None:
+        return False
+
+    liftable, fixed = [], []
+    for item in board.GetTracks():
+        if item.GetNetCode() in (0, code):
+            continue
+        if item.IsLocked() or item.GetNetname() in PLANE_NETS:
+            fixed.append(item)
+        else:
+            liftable.append(item)
+    pad_boxes = []
+    for footprint in board.GetFootprints():
+        for other in footprint.Pads():
+            if other.GetNetCode() != code:
+                box = other.GetBoundingBox()
+                pad_boxes.append((box.GetLeft() / 1e6, box.GetTop() / 1e6, box.GetRight() / 1e6, box.GetBottom() / 1e6))
+
+    def half(item) -> float:
+        return (item.GetWidth(pcbnew.F_Cu) if isinstance(item, pcbnew.PCB_VIA) else item.GetWidth()) / 2e6
+
+    def too_close(item, x: float, y: float) -> bool:
+        clr = ESCAPE_CLEARANCE if grid.in_escape((x, y, x, y)) else CLEARANCE
+        return segment_distance(item, (x, y)) < VIA_DIAMETER / 2 + clr + half(item)
+
+    reach = VIA_DIAMETER / 2 + 0.02
+    box = island.BBox()
+    x0, y0 = pad.GetPosition().x / 1e6, pad.GetPosition().y / 1e6
+    best = None
+    gx = box.GetLeft() / 1e6
+    while gx <= box.GetRight() / 1e6:
+        gy = box.GetTop() / 1e6
+        while gy <= box.GetBottom() / 1e6:
+            probes = [(gx, gy)] + [(gx + reach * math.cos(math.radians(a)), gy + reach * math.sin(math.radians(a)))
+                                   for a in range(0, 360, 30)]
+            if all(island.Contains(pcbnew.VECTOR2I(pcbnew.FromMM(px), pcbnew.FromMM(py))) for px, py in probes):
+                clr = ESCAPE_CLEARANCE if grid.in_escape((gx, gy, gx, gy)) else CLEARANCE
+                r = VIA_DIAMETER / 2 + clr
+                pad_hit = any(l - r < gx < rr + r and t - r < gy < bb + r for l, t, rr, bb in pad_boxes)
+                if not pad_hit and not any(too_close(item, gx, gy) for item in fixed):
+                    blockers = [item for item in liftable if too_close(item, gx, gy)]
+                    key = (len(blockers), math.hypot(gx - x0, gy - y0))
+                    if blockers and (best is None or key < best[0]):
+                        best = (key, gx, gy, blockers)
+            gy += GRID
+        gx += GRID
+    if best is None:
+        return False
+    _key, _x, _y, lifted = best
+    for item in lifted:
+        board.Remove(item)
+    if via_in_island(board, grid, net, pad):
+        names = sorted({item.GetNetname() for item in lifted})
+        print(f"  lifted {len(lifted)} segment(s) of {', '.join(names)} to make room; the cut ends follow as ordinary gaps")
+        return True
+    for item in lifted:
+        board.Add(item)
+    return False
+
+
+def via_in_island(board: "pcbnew.BOARD", grid: "Grid", net: "pcbnew.NETINFO_ITEM", pad: "pcbnew.PAD") -> bool:
+    """Stitch the pour island an orphan pad sits in, anywhere inside it.
+
+    drop_via_to_plane() runs a track from the pad to a via site, which needs
+    an escape lane. U4's pin 33 (GND) has none -- pin 34's +5V fanout stub
+    runs 0.5mm away -- but it does not need one: it already sits in a 3.3mm2
+    island of F.Cu GND pour, and a via anywhere in that island connects it.
+    The pour keeps its own clearance from every other net, so a via whose
+    whole annulus lies inside the island is clear of them by construction;
+    what is left to check is the drill against other holes.
+    """
+    code = net.GetNetCode()
+    pos = pad.GetPosition()
+    island = None
+    for zone in board.Zones():
+        if zone.GetIsRuleArea() or zone.GetNetCode() != code:
+            continue
+        for layer in LAYERS:
+            if not (zone.IsOnLayer(layer) and pad.IsOnLayer(layer)):
+                continue
+            polys = zone.GetFilledPolysList(layer)
+            for i in range(polys.OutlineCount()):
+                candidate = pcbnew.SHAPE_POLY_SET()
+                candidate.AddOutline(polys.Outline(i))
+                if candidate.Contains(pos) or candidate.Collide(pos, pcbnew.FromMM(0.2)):
+                    island = candidate
+                    break
+    if island is None:
+        return False
+    holes = [(v.GetPosition().x / 1e6, v.GetPosition().y / 1e6, v.GetDrillValue() / 1e6)
+             for v in board.GetTracks() if isinstance(v, pcbnew.PCB_VIA)]
+    for footprint in board.GetFootprints():
+        for other in footprint.Pads():
+            if other.GetDrillSizeX() > 0:
+                holes.append((other.GetPosition().x / 1e6, other.GetPosition().y / 1e6,
+                              other.GetDrillSizeX() / 1e6))
+    hole_gap = 0.25  # STACKUP min_hole_to_hole_mm
+    reach = VIA_DIAMETER / 2 + 0.02
+    # The island only vouches for its own layer. The via goes through the
+    # board, so on every other signal layer it is an ordinary via and has to
+    # clear whatever is there -- the first one this placed landed on a
+    # /ST_CL track on B.Cu, 0.035mm away.
+    _blocked, via_blocked = grid.build(code)
+    box = island.BBox()
+    x0, y0 = pos.x / 1e6, pos.y / 1e6
+    sites = []
+    gx = box.GetLeft() / 1e6
+    while gx <= box.GetRight() / 1e6:
+        gy = box.GetTop() / 1e6
+        while gy <= box.GetBottom() / 1e6:
+            sites.append((math.hypot(gx - x0, gy - y0), gx, gy))
+            gy += GRID
+        gx += GRID
+    for _d, x, y in sorted(sites):
+        probes = [(x, y)] + [(x + reach * math.cos(math.radians(a)), y + reach * math.sin(math.radians(a)))
+                             for a in range(0, 360, 30)]
+        if not all(island.Contains(pcbnew.VECTOR2I(pcbnew.FromMM(px), pcbnew.FromMM(py))) for px, py in probes):
+            continue
+        if any(math.hypot(x - hx, y - hy) < VIA_DRILL / 2 + hd / 2 + hole_gap for hx, hy, hd in holes):
+            continue
+        cx, cy = int(round(x / GRID)), int(round(y / GRID))
+        if not (0 <= cx < grid.nx and 0 <= cy < grid.ny) or any(v[cx, cy] for v in via_blocked):
+            continue
+        via = pcbnew.PCB_VIA(board)
+        via.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(y)))
+        via.SetFrontWidth(pcbnew.FromMM(VIA_DIAMETER))
+        via.SetDrill(pcbnew.FromMM(VIA_DRILL))
+        via.SetNet(net)
+        via.SetLayerPair(pcbnew.F_Cu, pcbnew.B_Cu)
+        board.Add(via)
+        ref = pad.GetParentFootprint().GetReference()
+        print(f"stitched {net.GetNetname()} island around {ref} pin {pad.GetNumber()} down at ({x:.2f},{y:.2f})")
+        return True
+    return False
+
+
 def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -> Optional[str]:
     """Fix a single unconnected pair. Returns an error string, or None on success."""
     x1, y1, x2, y2 = pair
@@ -850,6 +1012,10 @@ def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -
             layers = [i for i, layer in enumerate(LAYERS) if pad.IsOnLayer(layer)] or [0]
             origin = (pad.GetPosition().x / 1e6, pad.GetPosition().y / 1e6)
             if drop_via_to_plane(board, grid, orphan_net, origin, layers):
+                return None
+            if via_in_island(board, grid, orphan_net, pad):
+                return None
+            if clear_island_and_stitch(board, grid, orphan_net, pad):
                 return None
         return f"({x1:.2f},{y1:.2f}) -> ({x2:.2f},{y2:.2f}): could not identify both ends"
     net_code, start_layers = start

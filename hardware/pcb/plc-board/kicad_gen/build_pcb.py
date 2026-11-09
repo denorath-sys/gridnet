@@ -658,7 +658,7 @@ def add_power_fanout(board: "pcbnew.BOARD", nets: Dict[str, "pcbnew.NETINFO_ITEM
     # and the 42-44 +5V via, 1.0mm apart, from both existing. The stubs are
     # checked too, which the boxes never did: a stub running past another
     # net's via is as much a clearance error as two vias touching.
-    fanouts: List[Tuple[str, "pcbnew.VECTOR2I", "pcbnew.VECTOR2I"]] = []
+    fanouts: List[Tuple[str, List[Tuple["pcbnew.VECTOR2I", "pcbnew.VECTOR2I"]], "pcbnew.VECTOR2I"]] = []
     via_gap = VIA_DIAMETER + 0.2            # via to via, centre to centre
     stub_gap = VIA_DIAMETER / 2 + 0.2 + 0.1  # via centre to a 0.2mm stub
 
@@ -669,14 +669,39 @@ def add_power_fanout(board: "pcbnew.BOARD", nets: Dict[str, "pcbnew.NETINFO_ITEM
         t = 0.0 if length_sq == 0 else max(0.0, min(1.0, ((px - ax) * ex + (py - ay) * ey) / length_sq))
         return math.hypot(px - (ax + t * ex), py - (ay + t * ey))
 
-    def fanout_clear(name: str, start: "pcbnew.VECTOR2I", via: "pcbnew.VECTOR2I") -> bool:
-        for other, o_start, o_via in fanouts:
+    def fanout_clear(name: str, segs, via: "pcbnew.VECTOR2I") -> bool:
+        """`segs` is the stub as a list of (start, end) legs ending at `via`."""
+        for other, o_segs, o_via in fanouts:
             if other == name:
                 continue
             if math.hypot((via.x - o_via.x) / 1e6, (via.y - o_via.y) / 1e6) < via_gap:
                 return False
-            if seg_dist_mm(o_via, start, via) < stub_gap or seg_dist_mm(via, o_start, o_via) < stub_gap:
+            if any(seg_dist_mm(o_via, a, b) < stub_gap for a, b in segs):
                 return False
+            if any(seg_dist_mm(via, a, b) < stub_gap for a, b in o_segs):
+                return False
+        return True
+
+    def legs_clear_of_pads(name: str, segs) -> bool:
+        """Each leg keeps the Default clearance from other nets' pads.
+
+        The straight stubs never needed this -- they run out along their own
+        pad's row -- but a dogleg crosses a neighbour's row, so it is checked
+        against every pad by sampling along the leg.
+        """
+        limit = 0.1 + 0.2  # half a 0.2mm stub, plus clearance
+        for a, b in segs:
+            for i in range(21):
+                t = i / 20
+                px = (a.x + (b.x - a.x) * t) / 1e6
+                py = (a.y + (b.y - a.y) * t) / 1e6
+                for box, net in obstacles:
+                    if net == name:
+                        continue
+                    dx = max(box.GetLeft() / 1e6 - px, 0, px - box.GetRight() / 1e6)
+                    dy = max(box.GetTop() / 1e6 - py, 0, py - box.GetBottom() / 1e6)
+                    if math.hypot(dx, dy) < limit:
+                        return False
         return True
 
     def add_track(net_name: str, a: "pcbnew.VECTOR2I", b: "pcbnew.VECTOR2I") -> None:
@@ -751,23 +776,60 @@ def add_power_fanout(board: "pcbnew.BOARD", nets: Dict[str, "pcbnew.NETINFO_ITEM
                 # an odd run, the bridge between the two middle pads for an
                 # even one.
                 origin = pcbnew.VECTOR2I((first.x + last.x) // 2, (first.y + last.y) // 2)
-                for distance in (1.6, 2.0, 2.4, 2.8):
-                    vx = origin.x + int(step[0] * mm(distance))
-                    vy = origin.y + int(step[1] * mm(distance))
+
+                def at(base: "pcbnew.VECTOR2I", out_mm: float, side_mm: float = 0.0) -> "pcbnew.VECTOR2I":
+                    # `out` along the edge's outward step, `side` along the edge.
+                    lateral = (0, 1) if step[0] else (1, 0)
+                    return pcbnew.VECTOR2I(base.x + int(step[0] * mm(out_mm) + lateral[0] * mm(side_mm)),
+                                           base.y + int(step[1] * mm(out_mm) + lateral[1] * mm(side_mm)))
+
+                # Straight out first. Failing that, a dogleg into an unused
+                # neighbour's row: out just past the pad end, 45 degrees across
+                # one pitch, then out to the via. Only towards a pad with no
+                # net -- that row carries no escaping signal to block. U4's pin
+                # 33 (GND) needs it: pin 34's +5V via is 0.5mm away, but pin 32
+                # is NC, and its row is free.
+                candidates = [[origin, at(origin, d)] for d in (1.6, 2.0, 2.4, 2.8)]
+                if len(run) == 1:
+                    idx = edge_pads.index(run[0])
+                    for side in (-1, 1):
+                        j = idx + side
+                        if not 0 <= j < len(edge_pads):
+                            continue
+                        other = edge_pads[j].GetNetname()
+                        if other and not other.startswith("unconnected-"):
+                            continue
+                        pitch = (along(edge_pads[j]) - along(run[0])) / 1e6
+                        knee = at(origin, 0.5)
+                        # Half a pitch first: on U4's bottom edge pin 33 sits
+                        # between pin 31's and pin 34's +5V stubs, 1.5mm
+                        # apart, and the one place a via clears both is
+                        # midway. A full pitch would put it 0.5mm from pin
+                        # 31's stub.
+                        for frac in (0.5, 1.0):
+                            across = at(knee, abs(pitch) * frac, pitch * frac)
+                            candidates += [[origin, knee, across, at(across, d)] for d in (0.4, 0.6, 0.8, 1.2, 1.6)]
+                for points in candidates:
+                    v = points[-1]
+                    vx, vy = v.x, v.y
+                    segs = list(zip(points, points[1:]))
                     spot = pcbnew.BOX2I(pcbnew.VECTOR2I(vx - clear, vy - clear),
                                         pcbnew.VECTOR2I(2 * clear, 2 * clear))
                     if any(box.Intersects(spot) and net != name for box, net in obstacles):
                         continue
                     if not hole_clear(vx, vy):
                         continue
-                    if not fanout_clear(name, origin, pcbnew.VECTOR2I(vx, vy)):
+                    if not fanout_clear(name, segs, v):
+                        continue
+                    if len(points) > 2 and not legs_clear_of_pads(name, segs[1:]):
                         continue
                     make_via(board, nets[name], vx, vy)
                     holes.append((vx, vy, mm(VIA_DRILL)))
                     if len(run) > 1:
                         add_track(name, first, last)
-                    add_track(name, origin, pcbnew.VECTOR2I(vx, vy))
-                    fanouts.append((name, origin, pcbnew.VECTOR2I(vx, vy)))
+                    for a, b in segs:
+                        add_track(name, a, b)
+                    fanouts.append((name, segs, v))
                     placed += 1
                     break
                 else:
