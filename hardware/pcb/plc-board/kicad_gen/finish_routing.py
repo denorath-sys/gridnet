@@ -278,13 +278,29 @@ class Grid:
                 self._stamp_box(blocked[idx], rect, width / 2)
                 self._stamp_box(via_blocked[idx], rect, VIA_DIAMETER / 2)
 
-        # Keep off the board edge.
-        edge = int(BOARD_MARGIN / GRID)
-        for grid in blocked + via_blocked:
-            grid[:edge, :] = True
-            grid[-edge:, :] = True
-            grid[:, :edge] = True
-            grid[:, -edge:] = True
+        # Keep off the board edge -- measured from the copper's edge, and from
+        # the board's real outline.
+        #
+        # Both used to be wrong. The margin was applied to a track's
+        # centreline, so a track the router laid exactly on the margin sat
+        # 0.1mm inside the 0.5mm rule. And the far edges were counted from the
+        # end of the grid, which is built 1mm larger than the board: on the
+        # right and bottom the blocked strip lay off the board entirely and
+        # the router could run copper up to the outline.
+        outline = self.board.GetBoardEdgesBoundingBox()
+        left, top = outline.GetLeft() / 1e6, outline.GetTop() / 1e6
+        right, bottom = outline.GetRight() / 1e6, outline.GetBottom() / 1e6
+        for grids, half in ((blocked, width / 2), (via_blocked, VIA_DIAMETER / 2)):
+            margin = BOARD_MARGIN + half
+            lo_x = int(math.ceil((left + margin) / GRID - EPSILON))
+            hi_x = int(math.floor((right - margin) / GRID + EPSILON))
+            lo_y = int(math.ceil((top + margin) / GRID - EPSILON))
+            hi_y = int(math.floor((bottom - margin) / GRID + EPSILON))
+            for grid in grids:
+                grid[:max(lo_x, 0), :] = True
+                grid[hi_x + 1:, :] = True
+                grid[:, :max(lo_y, 0)] = True
+                grid[:, hi_y + 1:] = True
 
         return blocked, via_blocked
 
@@ -784,7 +800,40 @@ def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -
     )
 
 
+def strip_edge_violations(board: "pcbnew.BOARD") -> int:
+    """Delete autorouter copper that breaks the board-edge clearance rule.
+
+    Freerouting is not told about KiCad's 0.5mm copper-to-edge minimum and
+    does not keep it: one run laid /ST_RESETN 0.26mm from the top edge, in
+    three segments, and nothing noticed because no run before this had ever
+    reached the final DRC. Deleting the offending segments turns them into
+    ordinary unconnected pairs, which the loop below then routes with the
+    margin applied.
+    """
+    outline = board.GetBoardEdgesBoundingBox()
+    left, top = outline.GetLeft() / 1e6, outline.GetTop() / 1e6
+    right, bottom = outline.GetRight() / 1e6, outline.GetBottom() / 1e6
+    doomed = []
+    for item in board.GetTracks():
+        is_via = isinstance(item, pcbnew.PCB_VIA)
+        half = (item.GetWidth(pcbnew.F_Cu) if is_via else item.GetWidth()) / 2e6
+        for end in (item.GetStart(), item.GetEnd()):
+            x, y = end.x / 1e6, end.y / 1e6
+            if min(x - left, right - x, y - top, bottom - y) - half < BOARD_MARGIN - EPSILON:
+                doomed.append(item)
+                break
+    for item in doomed:
+        print(f"removed {item.GetNetname()} copper within {BOARD_MARGIN}mm of the board edge")
+        board.Remove(item)
+    return len(doomed)
+
+
 def main() -> None:
+    board = pcbnew.LoadBoard(BOARD_PATH)
+    if strip_edge_violations(board):
+        refill_zones(board)
+        board.Save(BOARD_PATH)
+
     # One repair per round, re-checking with DRC in between. Repairs change
     # the board -- a rip-up can complete several connections at once, or move
     # where the remaining gap is -- so a list of pairs collected up front goes
