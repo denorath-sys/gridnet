@@ -109,18 +109,26 @@ def refill_zones(board: "pcbnew.BOARD") -> None:
 
 
 def save_refilled(board: "pcbnew.BOARD", path: str) -> None:
-    """Save `board`, then refill its zones from a fresh load and save again.
+    """Save `board`, then refill its zones in a separate Python process.
 
-    Not a refill on the board in hand. After items have been removed from it
-    -- which every rip-up and the edge-clearance strip do -- KiCad 9's
-    binding hands back board.Zones() as bare SwigPyObjects with no methods,
-    and the process segfaults on its way out. A board loaded from disk has
-    no such history.
+    Not on the board in hand, and not even in this process. Once items have
+    been taken off a board -- every rip-up and the edge-clearance strip do --
+    KiCad 9's SWIG layer starts reporting "memory leak of type 'PCB_TRACK *',
+    no destructor found", and from then on it hands back *any* board's
+    Zones(), even one freshly loaded from disk, as bare SwigPyObjects; the
+    process then segfaults on exit. A clean interpreter has none of that.
     """
     board.Save(path)
-    fresh = pcbnew.LoadBoard(path)
-    refill_zones(fresh)
-    fresh.Save(path)
+    subprocess.run(
+        [sys.executable, "-c",
+         "import sys, pcbnew\n"
+         "b = pcbnew.LoadBoard(sys.argv[1])\n"
+         "zones = [z for z in b.Zones() if not z.GetIsRuleArea()]\n"
+         "pcbnew.ZONE_FILLER(b).Fill(zones)\n"
+         "b.Save(sys.argv[1])\n",
+         path],
+        check=True, capture_output=True,
+    )
 
 
 def drc_unconnected(board_path: str) -> List[Tuple[float, float, float, float]]:
@@ -870,14 +878,46 @@ def strip_edge_violations(board: "pcbnew.BOARD") -> int:
                 break
     for item in doomed:
         print(f"removed {item.GetNetname()} copper within {BOARD_MARGIN}mm of the board edge")
-        board.Remove(item)
+        # Delete, not Remove: Remove hands the item's ownership to Python,
+        # which has no destructor for it -- see save_refilled().
+        board.Delete(item)
     return len(doomed)
 
 
-def main() -> None:
+def run_step(*args: str) -> subprocess.CompletedProcess:
+    """Run one board-changing step of this script in a fresh interpreter.
+
+    Every step that takes copper off a board leaves KiCad 9's SWIG layer in
+    a state where later boards in the same process come back as bare
+    SwigPyObjects (see save_refilled()). So the loop below never edits a
+    board itself: each step loads, changes, saves and exits, and this process
+    only asks DRC what is left.
+    """
+    result = subprocess.run([sys.executable, __file__, *args], capture_output=True, text=True)
+    for line in result.stdout.splitlines():
+        if not line.startswith("ERROR "):  # reported by the caller as "set aside"
+            print(line)
+    return result
+
+
+def step_strip() -> None:
     board = pcbnew.LoadBoard(BOARD_PATH)
     if strip_edge_violations(board):
         save_refilled(board, BOARD_PATH)
+
+
+def step_repair(pair: Tuple[float, float, float, float]) -> None:
+    board = pcbnew.LoadBoard(BOARD_PATH)
+    error = repair_one(board, pair)
+    if error:
+        print("ERROR " + error)
+        sys.exit(2)
+    save_refilled(board, BOARD_PATH)
+
+
+def main() -> None:
+    if run_step("--strip").returncode != 0:
+        sys.exit("edge-clearance strip failed")
 
     # One repair per round, re-checking with DRC in between. Repairs change
     # the board -- a rip-up can complete several connections at once, or move
@@ -910,13 +950,13 @@ def main() -> None:
                 print("  " + failed.get(p, f"{p}: not attempted"))
             sys.exit(1)
 
-        board = pcbnew.LoadBoard(BOARD_PATH)
-        error = repair_one(board, pair)
-        if error:
+        result = run_step("--repair", *(repr(v) for v in pair))
+        if result.returncode != 0:
+            errors = [l[len("ERROR "):] for l in result.stdout.splitlines() if l.startswith("ERROR ")]
+            error = errors[0] if errors else f"{pair}: repair step crashed\n{result.stderr[-2000:]}"
             print("set aside: " + error)
             failed[pair] = error
             continue
-        save_refilled(board, BOARD_PATH)
         # Progress: whatever was set aside may have a way through now.
         failed.clear()
     print(f"could not finish -- gave up after {MAX_REPAIRS} repair rounds")
@@ -924,4 +964,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:2] == ["--strip"]:
+        step_strip()
+    elif sys.argv[1:2] == ["--repair"]:
+        step_repair(tuple(float(v) for v in sys.argv[2:6]))
+    else:
+        main()
