@@ -1112,7 +1112,11 @@ PLACEMENT: Dict[str, Tuple[float, float, float, str]] = {
     "C16": (47.0, 6.0, 0, "10uF/50V X5R"),  # DC block into T1's primary
     "R20": (49.0, 10.28, 0, "150R"),        # Rx series resistor
     "L2": (47.0, 14.0, 0, "150uH"),         # Rx resonant inductor
-    "C15": (52.5, 3.77, 0, "12nF"),        # Rx resonant capacitor
+    # Beside R20 and L2, the rest of the Rx tank (RX_IN is U4's pin 19, on
+    # its *left* edge). It used to sit at (52.5, 3.77), across the top of the
+    # QFN's pins 9-12, where it did nothing for the tank and closed off the
+    # band those pins escape through -- see R6 below.
+    "C15": (45.6, 10.28, 180, "12nF"),     # Rx resonant capacitor
     "C13": (57.0, 16.27, 0, "68pF C0G"),     # Sallen-Key feedback cap
     "C14": (49.0, 20.77, 0, "68pF C0G"),    # Sallen-Key shunt cap
     "R18": (58.0, 19.27, 0, "33k"),          # PA gain, feedback leg
@@ -1134,9 +1138,17 @@ PLACEMENT: Dict[str, Tuple[float, float, float, str]] = {
     "C11": (52.5, 17.6, 0, "100nF"),       # VCC (12V) local decoupling
     "FB1": (48.3, 17.6, 0, "FB"),          # VSSA-to-GND bridge
     "FB2": (61.77, 3.4, 0, "FB"),          # VDD_A to VDD_PLL
-    "R6": (57.0, 3.77, 0, "10k"),          # RESETN pull-up
-    # BR0 and BR1 are adjacent pads on the QFN's top edge (40 and 39, at
-    # x=57.25 and 57.75, y=6.55), so both escape upwards. R8 used to sit at
+    # Out of the way of U4's top edge. At (57.0, 3.77) R6 sat 0.4mm above
+    # pins 3-8, leaving a 1.35mm band between the package and its own pads
+    # for two fanout vias (pins 3 and 6) and the five JTAG signals plus
+    # RESETN on their way right to J3. Every routing attempt with this
+    # placement ended with one of those six unrouted -- /ST_TDI, /ST_TMS,
+    # /ST_TRSTN, /ST_RESETN, sometimes two at once. Up here, left of the
+    # pins, RESETN (pin 10) reaches it in a few millimetres and the band
+    # above the fanout vias is open.
+    "R6": (50.5, 2.0, 0, "10k"),           # RESETN pull-up
+    # BR0 and BR1 are adjacent pads on the QFN's right edge (40 and 39, at
+    # x=59.45, y=11.25 and 11.75), so both escape rightwards. R8 used to sit at
     # (66, 15.78), below and right of the chip, which asked /ST_BR0 to travel
     # around the whole east face of a 48-pin 0.5mm-pitch package. Freerouting
     # could not place it and neither could the repair router. Its pull-up now
