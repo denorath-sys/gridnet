@@ -238,13 +238,17 @@ legal. What it no longer claims: energising the wire itself.
 Open questions
 --------------
 
-- **The coupling transformer is still unspecified.** `hardware/bom.md` flags
-  the Würth WE-PLCC series as needing confirmation against ST's application
-  note, and that is still true — AN4068 has the reference coupling circuit
-  and this document does not reproduce it. The PA output network, the series
-  coupling capacitor and the `RX_IN` path all depend on it.
-- **`ZC_IN` (zero crossing)** has no circuit yet. With no relay to align to a
-  zero crossing, its remaining use is mains-presence detection and PLC timing.
+- ~~**The coupling transformer is still unspecified.**~~ Closed. It is the
+  Würth 750510231 that AN4068 names (`T1`), and the PA output network, series
+  coupling capacitor and `RX_IN` path are built around it on Board 1
+  ([`docs/plc-coupling.md`](plc-coupling.md)). What is still open is one
+  rating: Würth quotes 2000 VAC for 1 s against AN4068's ≥4 kV impulse
+  withstand — confirm with Würth before ordering.
+- ~~**`ZC_IN` (zero crossing)** has no circuit yet.~~ Closed by decision:
+  Board 1 deliberately does not build it. The ST7580 datasheet calls it
+  optional, `docs/protocol.md` defines no mains-synchronous behaviour, and
+  during an outage there is no mains to synchronise to. AN4068's circuit is
+  recorded in `docs/plc-coupling.md` in case it is ever wanted.
 - ~~**Which CENELEC band to use.**~~ Closed. A-band is not available to this
   project; B (95–125 kHz) and C (125–140 kHz) are, the ST7580 covers them, and
   `docs/protocol.md` now specifies them throughout. Board 1's coupling network

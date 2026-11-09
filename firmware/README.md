@@ -38,9 +38,13 @@ firmware/
 ```
 
 Note that `bootloader/crypto/` is the only cryptography in this tree. The
-protocol layer that `src/router/` and `src/plc/` will implement has no
-authentication designed for it yet — see [`docs/protocol.md`](../docs/protocol.md)
-"Security — What Is Not Protected" before building on it.
+protocol layer that `src/router/` and `src/plc/` will implement now has an
+authentication design — [`docs/threat-model.md`](../docs/threat-model.md):
+Ed25519 node identity bound by trust-on-first-use, with the signing done on
+the ESP32-C3 because Ed25519's working set does not fit the `ROUTER` task's
+2KB stack — but none of it is implemented, and the wire format in
+[`docs/protocol.md`](../docs/protocol.md) is still the unauthenticated one.
+Read both before building on it.
 
 ## Build Requirements
 
