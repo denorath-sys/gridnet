@@ -953,6 +953,54 @@ def courtyard_boxes(board: "pcbnew.BOARD") -> List[Tuple[str, "pcbnew.BOX2I"]]:
     return boxes
 
 
+# Exposed pads whose net is not a plane's: a copper island of the pad's own net
+# under the part, on the inner GND layer and on B.Cu, for its thermal vias to
+# land on. ref -> (pad number, margin in mm beyond the pad).
+#
+# U4's exposed pad is ST_VSSA, not GND. ST7580 datasheet Table 2: "Electrically
+# connected to VSSA. It is recommended that the exposed pad be thermally
+# connected to a copper ground plane"; Figure 9 ties it to VSSA and VSS and
+# reaches GND only through a ferrite bead. And Table 5's 50 C/W is "mounted on
+# a 2-side + vias PCB with a ground dissipating area on the bottom side". So
+# the area the vias need is VSSA, and until REV 0.7 there was none: the plane
+# under them is GND, which cut clearance around all sixteen, and DRC called
+# them dangling. 0.5mm past the pad keeps each island inside U4's own pin
+# ring, clear of the GND and +5V fanout vias that sit 1.6mm outside it.
+THERMAL_ISLANDS = {"U4": ("49", 0.5)}
+THERMAL_ISLAND_LAYERS = (pcbnew.In1_Cu, pcbnew.B_Cu)
+
+
+def add_thermal_islands(board: "pcbnew.BOARD", nets: Dict[str, "pcbnew.NETINFO_ITEM"]) -> int:
+    count = 0
+    for ref, (pad_number, margin) in THERMAL_ISLANDS.items():
+        fp = board.FindFootprintByReference(ref)
+        pad = next((p for p in fp.Pads() if p.GetNumber() == pad_number), None)
+        if pad is None:
+            raise SystemExit(f"{ref} has no pad {pad_number} -- cannot add its thermal island")
+        net = nets.get(pad.GetNetname())
+        box = pad.GetBoundingBox()
+        left, top = box.GetLeft() / 1e6 - margin, box.GetTop() / 1e6 - margin
+        right, bottom = box.GetRight() / 1e6 + margin, box.GetBottom() / 1e6 + margin
+        for layer in THERMAL_ISLAND_LAYERS:
+            zone = pcbnew.ZONE(board)
+            zone.SetLayer(layer)
+            zone.SetNet(net)
+            zone.SetIsFilled(False)
+            # Above the GND pour and the GND plane, which flow around it.
+            zone.SetAssignedPriority(10)
+            zone.SetPadConnection(pcbnew.ZONE_CONNECTION_FULL)
+            zone.SetLocalClearance(mm(0.2))
+            zone.SetMinThickness(mm(0.2))
+            zone.SetZoneName(f"thermal-{ref}")
+            outline = zone.Outline()
+            outline.NewOutline()
+            for x, y in ((left, top), (right, top), (right, bottom), (left, bottom)):
+                outline.Append(mm(x), mm(y))
+            board.Add(zone)
+            count += 1
+    return count
+
+
 def pour_ground(board_path: str) -> None:
     """Add the GND pours, stitch them, and fill -- on an already-routed board.
 
@@ -986,7 +1034,9 @@ def pour_ground(board_path: str) -> None:
         raise SystemExit("board already has ground zones -- regenerate it with build_pcb.py first")
 
     add_gnd_zones(board, gnd)
-    add_plane_zones(board, {n.GetNetname(): n for n in board.GetNetInfo().NetsByName().values()})
+    nets_by_name = {n.GetNetname(): n for n in board.GetNetInfo().NetsByName().values()}
+    add_plane_zones(board, nets_by_name)
+    add_thermal_islands(board, nets_by_name)
     stitches = add_stitching_vias(board, gnd)
     board.BuildConnectivity()
     copper_zones = [z for z in board.Zones() if not z.GetIsRuleArea()]
@@ -1306,7 +1356,7 @@ PLACEMENT: Dict[str, Tuple[float, float, float, str]] = {
     "C4": (53.5, 20.77, 0, "100nF"),         # VDD_REG_1V8
     "C5": (68.0, 11.78, 0, "100nF"),        # VDD_PLL
     "C6": (63.22, 9.03, 0, "1uF"),          # VCCA
-    "C11": (52.5, 17.6, 0, "100nF"),       # VCC (12V) local decoupling
+    "C11": (52.5, 17.6, 0, "100nF"),       # VCC (12V) local decoupling, to VSS
     "FB1": (48.3, 17.6, 0, "FB"),          # VSSA-to-GND bridge
     "FB2": (61.77, 3.4, 0, "FB"),          # VDD_A to VDD_PLL
     # Out of the way of U4's top edge. At (57.0, 3.77) R6 sat 0.4mm above
@@ -1343,7 +1393,7 @@ PLACEMENT: Dict[str, Tuple[float, float, float, str]] = {
     "D8": (79.02, 42.8, 0, "SS34"),         # boost rectifier
     "C1": (68.78, 50.8, 0, "220uF"),         # HLK output bulk
     "C7": (68.77, 39.79, 0, "1F 5.5V"),       # supercapacitor hold-up
-    "C10": (71.42, 25.95, 0, "100uF"),        # +5V bulk
+    "C10": (71.42, 25.95, 0, "100uF"),        # +12V bulk (the boost output, not +5V)
     "R11": (47.8, 37.67, 0, "10R"),         # supercapacitor inrush limit
     "C8": (60.82, 51.2, 0, "22uF"),         # boost input
     "C9": (60.82, 55.2, 0, "22uF"),         # boost output
