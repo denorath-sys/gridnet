@@ -643,6 +643,14 @@ def add_power_fanout(board: "pcbnew.BOARD", nets: Dict[str, "pcbnew.NETINFO_ITEM
                 else:
                     runs.append([pad])
 
+            # GND last. Two adjacent pads on different planed nets cannot both
+            # fan straight out -- each one's via sits 0.5mm off the other's
+            # stub -- so whichever goes first takes the site. GND can do
+            # without one: the F.Cu pour reaches the outer end of its pad.
+            # +5V has no outer-layer pour and nothing else to fall back on, and
+            # on U4's bottom edge (pins 33 GND, 34 +5V) taking GND first left
+            # pin 34 boxed in by pin 33's via on every routing attempt.
+            runs.sort(key=lambda r: r[0].GetNetname() == "GND")
             for run in runs:
                 name = run[0].GetNetname()
                 if name not in planed:
