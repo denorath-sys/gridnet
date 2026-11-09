@@ -108,6 +108,21 @@ def refill_zones(board: "pcbnew.BOARD") -> None:
     pcbnew.ZONE_FILLER(board).Fill(zones)
 
 
+def save_refilled(board: "pcbnew.BOARD", path: str) -> None:
+    """Save `board`, then refill its zones from a fresh load and save again.
+
+    Not a refill on the board in hand. After items have been removed from it
+    -- which every rip-up and the edge-clearance strip do -- KiCad 9's
+    binding hands back board.Zones() as bare SwigPyObjects with no methods,
+    and the process segfaults on its way out. A board loaded from disk has
+    no such history.
+    """
+    board.Save(path)
+    fresh = pcbnew.LoadBoard(path)
+    refill_zones(fresh)
+    fresh.Save(path)
+
+
 def drc_unconnected(board_path: str) -> List[Tuple[float, float, float, float]]:
     """Ask kicad-cli which connections are missing.
 
@@ -856,8 +871,7 @@ def strip_edge_violations(board: "pcbnew.BOARD") -> int:
 def main() -> None:
     board = pcbnew.LoadBoard(BOARD_PATH)
     if strip_edge_violations(board):
-        refill_zones(board)
-        board.Save(BOARD_PATH)
+        save_refilled(board, BOARD_PATH)
 
     # One repair per round, re-checking with DRC in between. Repairs change
     # the board -- a rip-up can complete several connections at once, or move
@@ -896,8 +910,7 @@ def main() -> None:
             print("set aside: " + error)
             failed[pair] = error
             continue
-        refill_zones(board)
-        board.Save(BOARD_PATH)
+        save_refilled(board, BOARD_PATH)
         # Progress: whatever was set aside may have a way through now.
         failed.clear()
     print(f"could not finish -- gave up after {MAX_REPAIRS} repair rounds")
