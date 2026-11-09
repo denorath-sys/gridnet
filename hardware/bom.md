@@ -99,7 +99,7 @@ checked against the schematic directly.
 | 18 | Mains header mating plug | Würth Elektronik 691351400002 | Female plug for item 17 — the Schuko plug's L/N wires terminate here, and it plugs onto `J1`. **A pluggable header is only half a connector**; this part was missing from the BOM entirely through REV 0.9, so the board could have been fabricated with no way to attach mains wiring. Kept pluggable rather than swapped for a one-piece block because being able to detach mains from the board without desoldering is worth $1.25 during prototype bring-up | 1 | $1.25 | $1.25 |
 | 19 | Status LEDs | — | `D2`/`D3`/`D4` — Power (green, always-on), PLC (amber, driven by the ST7580's `PL_TX_ON`), Wi-Fi (blue, GPIO-driven so firmware can show real status). On-board and wired to the rails directly, not brought out to a separate header | 3 | $0.10 | $0.30 |
 | 20 | Programming / debug headers | — | `J2` (ESP32-C3 UART0 — without this there is no way to flash the module at all) and `J3` (ST7580 JTAG) | 2 | $0.20 | $0.40 |
-| 21 | Passive components | — | Remaining bulk/bypass R, C, L and ferrite beads (`C1`–`C6`, `C8`–`C11`, `FB1`–`FB2`, `R1`–`R20` less the coupling network above) | — | $1.50 | $1.50 |
+| 21 | Passive components | — | Remaining bulk/bypass R, C, L and ferrite beads (`C1`–`C6`, `C8`–`C11`, `FB1`–`FB2`, `R1`–`R20` less the coupling network above). **`FB1` is not a signal bead**: it is the ST7580's VSS–GND bridge (datasheet Figure 9), and the PA's DC supply current returns through it, since the 12V boost is GND-referenced — choose an 0805 part rated ≥1.5A with low DC resistance (I(PA_OUT)MAX is 1A) | — | $1.50 | $1.50 |
 | | | | | | **Board 1 Total** | **~$21.37** |
 
 > **On the one-piece alternative.** Würth 691214410002 (WR-TBL 2144, 7.62mm

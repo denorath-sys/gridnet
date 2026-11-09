@@ -117,7 +117,7 @@
       },
       "rules": {
         "max_error": 0.005,
-        "min_clearance": 0.2,
+        "min_clearance": 0.15,
         "min_connection": 0.0,
         "min_copper_edge_clearance": 0.5,
         "min_groove_width": 0.0,
@@ -130,7 +130,7 @@
         "min_text_height": 0.8,
         "min_text_thickness": 0.08,
         "min_through_hole_diameter": 0.3,
-        "min_track_width": 0.2,
+        "min_track_width": 0.15,
         "min_via_annular_width": 0.15,
         "min_via_diameter": 0.6,
         "solder_mask_to_copper_clearance": 0.0,
@@ -255,6 +255,24 @@
       },
       {
         "bus_width": 12,
+        "clearance": 0.2,
+        "diff_pair_gap": 0.25,
+        "diff_pair_via_gap": 0.25,
+        "diff_pair_width": 0.2,
+        "line_style": 0,
+        "microvia_diameter": 0.3,
+        "microvia_drill": 0.1,
+        "name": "Escape",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "priority": 4,
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "track_width": 0.15,
+        "via_diameter": 0.6,
+        "via_drill": 0.3,
+        "wire_width": 6
+      },
+      {
+        "bus_width": 12,
         "clearance": 2.5,
         "diff_pair_gap": 0.25,
         "diff_pair_via_gap": 0.25,
@@ -349,6 +367,126 @@
       {
         "netclass": "Power_5V",
         "pattern": "/USB_5V"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/PLC_LED"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_BR0"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_BR1"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_CL"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_PA_IN_N"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_PA_IN_P"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_RESETN"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_RXD"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_RX_IN"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_TCK"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_TDI"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_TDO"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_TMS"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_TRSTN"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_TXD"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_TX_OUT"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_T_REQ"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_VCCA"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_VDD_A"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_VDD_B"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_VDD_PLL"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_VDD_REG_1V8"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_XIN"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "/ST_XOUT"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "unconnected-(U4-CL_SEL-Pad36)"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "unconnected-(U4-NC-Pad29)"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "unconnected-(U4-NC-Pad30)"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "unconnected-(U4-NC-Pad32)"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "unconnected-(U4-PL_RX_ON-Pad37)"
+      },
+      {
+        "netclass": "Escape",
+        "pattern": "unconnected-(U4-ZC_IN-Pad18)"
       }
     ]
   },

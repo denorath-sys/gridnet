@@ -425,11 +425,17 @@ def build() -> Schematic:
     sch.net(xtal, "2", "ST_XOUT")
 
     # VCC (8-18V) now comes from the MT3608 boost above. It powers the power
-    # amplifier and generates VCCA internally. Decoupled locally at the pin.
+    # amplifier and generates VCCA internally. Decoupled locally at the pin --
+    # to VSS, not GND. Figure 8 of the datasheet draws VCC's capacitor to VSS
+    # (the power ground), and "all supply voltages must be properly filtered
+    # to their respective ground". This went to GND until REV 0.7, which put
+    # the PA's supply loop -- up to 1A (I(PA_OUT)MAX) -- through FB1, the
+    # ferrite Figure 9 puts between VSS and GND. VSS is on ST_VSSA (Figure 9:
+    # exposed pad, VSSA and VSS tied together).
     sch.net(st, "24", "+12V")
     vcc_c = sch.place("Device:C", "C", "100nF", 360, 90, footprint_override="Capacitor_SMD:C_0603_1608Metric", ref="C11")
     sch.net(vcc_c, "1", "+12V")
-    sch.power_pin(vcc_c, "2", "GND")
+    sch.net(vcc_c, "2", "ST_VSSA")
 
     # Output current limit. The ST7580 mirrors 1/CL_RATIO of the PA output
     # current through RCL to VSS and, once the resulting voltage passes

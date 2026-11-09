@@ -56,6 +56,9 @@ VIA_DIAMETER = 0.6
 VIA_DRILL = 0.3
 BOARD_MARGIN = 0.5  # mm kept clear of the board outline
 VIA_COST = 12       # in cells, to keep the router from stitching gratuitously
+MAX_REPAIRS = 60    # rounds, each one DRC check plus one attempted repair
+MAX_CHAIN_PADS = 6  # a rip-up neighbour with more pads is cut locally, not re-routed
+SOFT_COST = 8       # per cell, for crossing another net's liftable copper
 
 
 Cell = Tuple[int, int, int]  # (x index, y index, layer index 0=F.Cu 1=B.Cu)
@@ -66,13 +69,92 @@ LAYERS = (pcbnew.F_Cu, pcbnew.B_Cu)
 # NETINFO_ITEM.GetNetClass() as a bare SwigPyObject with no accessors, so the
 # rules cannot be read back off the board; importing the source of truth is
 # both simpler and harder to get out of step.
-from build_pcb import NETCLASSES  # noqa: E402
+from build_pcb import (  # noqa: E402
+    ESCAPE_AREAS, ESCAPE_CLEARANCE, ESCAPE_WIDTH, NETCLASSES, PLANES,
+    escape_area_name, escape_nets,
+)
 
 NET_RULES = {
     net: (width, clearance)
     for _name, (width, clearance, nets) in NETCLASSES.items()
     for net in nets
 }
+
+PLANE_NETS = {name for name, _layer in PLANES}
+
+
+def segment_distance(item: "pcbnew.PCB_TRACK", point: Tuple[float, float]) -> float:
+    """Distance in mm from `point` to a track's centreline (or a via's centre).
+
+    Not to its endpoints. A long track running straight past a stranded pad
+    has both ends far away and is exactly as much in the way.
+    """
+    ax, ay = item.GetStart().x / 1e6, item.GetStart().y / 1e6
+    bx, by = item.GetEnd().x / 1e6, item.GetEnd().y / 1e6
+    ex, ey = bx - ax, by - ay
+    length_sq = ex * ex + ey * ey
+    t = 0.0 if length_sq == 0 else max(0.0, min(1.0, ((point[0] - ax) * ex + (point[1] - ay) * ey) / length_sq))
+    return math.hypot(point[0] - (ax + t * ex), point[1] - (ay + t * ey))
+
+
+def board_outline(board: "pcbnew.BOARD") -> Tuple[float, float, float, float]:
+    """(left, top, right, bottom) in mm of the Edge.Cuts geometry itself.
+
+    Not GetBoardEdgesBoundingBox(), which includes the outline's drawn line
+    width and so sits 0.05mm outside the real edge on every side. Measured
+    from that, a Freerouting track 0.465mm from the top edge passed the
+    0.5mm check, and the repair router itself laid track 0.45mm from it --
+    six times over, each one "finishing" a gap it had not closed.
+    """
+    xs, ys = [], []
+    for item in board.GetDrawings():
+        if item.GetLayer() != pcbnew.Edge_Cuts:
+            continue
+        for point in (item.GetStart(), item.GetEnd()):
+            xs.append(point.x / 1e6)
+            ys.append(point.y / 1e6)
+    if not xs:
+        raise SystemExit("board has no Edge.Cuts outline")
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def refill_zones(board: "pcbnew.BOARD") -> None:
+    """Re-pour every copper zone around whatever copper is on the board now.
+
+    The pour runs *before* repair (see route.sh), so every track this script
+    lays goes down on top of an existing GND fill, and the router does not
+    treat that fill as an obstacle -- it is about to be recomputed, and the
+    refill is what carves clearance around the new copper. Until then the
+    stale fill overlaps it, which is a short as far as DRC is concerned. So
+    the refill happens after every repair, before the board is saved and
+    before DRC is asked what is still unconnected: a refill can strand a
+    piece of pour as easily as it frees one.
+    """
+    zones = [z for z in board.Zones() if not z.GetIsRuleArea()]
+    pcbnew.ZONE_FILLER(board).Fill(zones)
+
+
+def save_refilled(board: "pcbnew.BOARD", path: str) -> None:
+    """Save `board`, then refill its zones in a separate Python process.
+
+    Not on the board in hand, and not even in this process. Once items have
+    been taken off a board -- every rip-up and the edge-clearance strip do --
+    KiCad 9's SWIG layer starts reporting "memory leak of type 'PCB_TRACK *',
+    no destructor found", and from then on it hands back *any* board's
+    Zones(), even one freshly loaded from disk, as bare SwigPyObjects; the
+    process then segfaults on exit. A clean interpreter has none of that.
+    """
+    board.Save(path)
+    subprocess.run(
+        [sys.executable, "-c",
+         "import sys, pcbnew\n"
+         "b = pcbnew.LoadBoard(sys.argv[1])\n"
+         "zones = [z for z in b.Zones() if not z.GetIsRuleArea()]\n"
+         "pcbnew.ZONE_FILLER(b).Fill(zones)\n"
+         "b.Save(sys.argv[1])\n",
+         path],
+        check=True, capture_output=True,
+    )
 
 
 def drc_unconnected(board_path: str) -> List[Tuple[float, float, float, float]]:
@@ -104,6 +186,17 @@ class Grid:
 
     def __init__(self, board: "pcbnew.BOARD", width_mm: float, height_mm: float) -> None:
         self.board = board
+        # The U4 escape areas (see build_pcb.ESCAPE_AREAS): inside one,
+        # clearance is ESCAPE_CLEARANCE, and the part's signal nets route at
+        # ESCAPE_WIDTH everywhere.
+        self.escape_rects = []
+        names = {escape_area_name(ref) for ref in ESCAPE_AREAS}
+        for zone in board.Zones():
+            if zone.GetIsRuleArea() and zone.GetZoneName() in names:
+                box = zone.Outline().BBox()
+                self.escape_rects.append((box.GetLeft() / 1e6, box.GetTop() / 1e6,
+                                          box.GetRight() / 1e6, box.GetBottom() / 1e6))
+        self.escape_nets = set(escape_nets(board))
         self.nx = int(width_mm / GRID) + 1
         self.ny = int(height_mm / GRID) + 1
         self.width_mm = width_mm
@@ -158,9 +251,17 @@ class Grid:
         net = self.board.FindNet(net_code)
         if net is None:
             return TRACK_WIDTH, CLEARANCE
+        if net.GetNetname() in self.escape_nets:
+            return ESCAPE_WIDTH, CLEARANCE
         return NET_RULES.get(net.GetNetname(), (TRACK_WIDTH, CLEARANCE))
 
-    def build(self, net_code: int) -> Tuple[List["np.ndarray"], List["np.ndarray"]]:
+    def in_escape(self, rect: Tuple[float, float, float, float]) -> bool:
+        """Does this bounding box touch an escape area?"""
+        left, top, right, bottom = rect
+        return any(left <= r and right >= l and top <= b and bottom >= t
+                   for l, t, r, b in self.escape_rects)
+
+    def build(self, net_code: int, skip=None) -> Tuple[List["np.ndarray"], List["np.ndarray"]]:
         """Return (blocked-for-track, blocked-for-via) grids.
 
         Copper already on the net being routed is not an obstacle -- the
@@ -173,18 +274,28 @@ class Grid:
         blocked = [self._blank(), self._blank()]
         via_blocked = [self._blank(), self._blank()]
 
+        # Inside an escape area the clearance to an obstacle is the escape
+        # rule's. Decided per obstacle, by whether it touches the area: the
+        # DRC rule matches when either item does, so this is the conservative
+        # half of it.
+        def radii(rect) -> Tuple[float, float]:
+            clr = min(clearance, ESCAPE_CLEARANCE) if self.in_escape(rect) else clearance
+            return width / 2 + clr, VIA_DIAMETER / 2 + clr
+
         def obstacle(layer_idx: Optional[int], a, b, half_width: float) -> None:
+            t_radius, v_radius = radii((min(a[0], b[0]) - half_width, min(a[1], b[1]) - half_width,
+                                        max(a[0], b[0]) + half_width, max(a[1], b[1]) + half_width))
             targets = [layer_idx] if layer_idx is not None else [0, 1]
             for idx in targets:
-                self._stamp(blocked[idx], a, b, half_width + track_radius)
-                self._stamp(via_blocked[idx], a, b, half_width + via_radius)
+                self._stamp(blocked[idx], a, b, half_width + t_radius)
+                self._stamp(via_blocked[idx], a, b, half_width + v_radius)
 
         for item in self.board.GetTracks():
             is_via = isinstance(item, pcbnew.PCB_VIA)
             pos_a = (item.GetStart().x / 1e6, item.GetStart().y / 1e6)
             pos_b = (item.GetEnd().x / 1e6, item.GetEnd().y / 1e6)
             half = (item.GetWidth(pcbnew.F_Cu) if is_via else item.GetWidth()) / 2e6
-            if item.GetNetCode() == net_code:
+            if item.GetNetCode() == net_code or (skip is not None and skip(item)):
                 continue
             if not is_via and item.GetLayer() not in LAYERS:
                 # Copper on an inner plane layer. This router only lays track
@@ -210,9 +321,10 @@ class Grid:
                 on_front = pad.IsOnLayer(pcbnew.F_Cu)
                 on_back = pad.IsOnLayer(pcbnew.B_Cu)
                 layers = [0] if on_front and not on_back else ([1] if on_back and not on_front else [0, 1])
+                t_radius, v_radius = radii(rect)
                 for idx in layers:
-                    self._stamp_box(blocked[idx], rect, track_radius)
-                    self._stamp_box(via_blocked[idx], rect, via_radius)
+                    self._stamp_box(blocked[idx], rect, t_radius)
+                    self._stamp_box(via_blocked[idx], rect, v_radius)
 
         # Rule areas -- the isolation barrier, and both antenna keepouts.
         #
@@ -233,6 +345,8 @@ class Grid:
             box = zone.Outline().BBox()
             rect = (box.GetLeft() / 1e6, box.GetTop() / 1e6,
                     box.GetRight() / 1e6, box.GetBottom() / 1e6)
+            # By what the area forbids, not by being a rule area: the escape
+            # areas forbid nothing and exist only to be named by a DRC rule.
             for idx in range(2):
                 # Half the track, not the clearance. A keepout is a boundary,
                 # not a conductor: copper may come right up to its edge, it
@@ -242,20 +356,36 @@ class Grid:
                 # 30.92 and made that pad unroutable by construction. /AC_N
                 # failed identically on every attempt of two runs before this
                 # was found.
-                self._stamp_box(blocked[idx], rect, width / 2)
-                self._stamp_box(via_blocked[idx], rect, VIA_DIAMETER / 2)
+                if zone.GetDoNotAllowTracks():
+                    self._stamp_box(blocked[idx], rect, width / 2)
+                if zone.GetDoNotAllowVias():
+                    self._stamp_box(via_blocked[idx], rect, VIA_DIAMETER / 2)
 
-        # Keep off the board edge.
-        edge = int(BOARD_MARGIN / GRID)
-        for grid in blocked + via_blocked:
-            grid[:edge, :] = True
-            grid[-edge:, :] = True
-            grid[:, :edge] = True
-            grid[:, -edge:] = True
+        # Keep off the board edge -- measured from the copper's edge, and from
+        # the board's real outline.
+        #
+        # Both used to be wrong. The margin was applied to a track's
+        # centreline, so a track the router laid exactly on the margin sat
+        # 0.1mm inside the 0.5mm rule. And the far edges were counted from the
+        # end of the grid, which is built 1mm larger than the board: on the
+        # right and bottom the blocked strip lay off the board entirely and
+        # the router could run copper up to the outline.
+        left, top, right, bottom = board_outline(self.board)
+        for grids, half in ((blocked, width / 2), (via_blocked, VIA_DIAMETER / 2)):
+            margin = BOARD_MARGIN + half
+            lo_x = int(math.ceil((left + margin) / GRID - EPSILON))
+            hi_x = int(math.floor((right - margin) / GRID + EPSILON))
+            lo_y = int(math.ceil((top + margin) / GRID - EPSILON))
+            hi_y = int(math.floor((bottom - margin) / GRID + EPSILON))
+            for grid in grids:
+                grid[:max(lo_x, 0), :] = True
+                grid[hi_x + 1:, :] = True
+                grid[:, :max(lo_y, 0)] = True
+                grid[:, hi_y + 1:] = True
 
         return blocked, via_blocked
 
-    def simplify(self, path: List[Cell], blocked: List["np.ndarray"], goals) -> List[Cell]:
+    def simplify(self, path: List[Cell], blocked: List["np.ndarray"], goals, allowed=frozenset()) -> List[Cell]:
         """Pull the staircase straight.
 
         A* on a four-neighbour grid can only step along the axes, so a route
@@ -282,7 +412,7 @@ class Grid:
                 t = i / steps if steps else 0.0
                 x = int(round(a[0] + (b[0] - a[0]) * t))
                 y = int(round(a[1] + (b[1] - a[1]) * t))
-                if blocked[layer][x, y] and (x, y, layer) not in goals:
+                if blocked[layer][x, y] and (x, y, layer) not in goals and (x, y, layer) not in allowed:
                     return False
             return True
 
@@ -305,8 +435,17 @@ class Grid:
         target: Tuple[float, float],
         target_layers: Sequence[int],
         net_code: int,
+        liftable=None,
     ) -> Optional[List[Cell]]:
+        """A* from start to target. With `liftable`, copper it accepts is soft:
+        passable at SOFT_COST per cell instead of blocked (see lift_route())."""
         blocked, via_blocked = self.build(net_code)
+        soft = soft_via = None
+        if liftable is not None:
+            full, full_via = blocked, via_blocked
+            blocked, via_blocked = self.build(net_code, skip=liftable)
+            soft = [f & ~h for f, h in zip(full, blocked)]
+            soft_via = [f & ~h for f, h in zip(full_via, via_blocked)]
         sx, sy = int(round(start[0] / GRID)), int(round(start[1] / GRID))
         tx, ty = int(round(target[0] / GRID)), int(round(target[1] / GRID))
         if not (0 <= sx < self.nx and 0 <= sy < self.ny):
@@ -343,7 +482,14 @@ class Grid:
                 while node is not None:
                     path.append(node)
                     node = prev[node]
-                return self.simplify(list(reversed(path)), blocked, goals)
+                path.reverse()
+                if soft is None:
+                    return self.simplify(path, blocked, goals)
+                # Straighten without wandering into soft copper the search
+                # did not choose to cross: every extra crossing is another
+                # segment lifted.
+                full = [b | sft for b, sft in zip(blocked, soft)]
+                return self.simplify(path, full, goals, allowed=frozenset(path))
 
             base = dist[cell]
             neighbours = (
@@ -358,8 +504,12 @@ class Grid:
                 if step == VIA_COST:
                     if via_blocked[0][nx_, ny_] or via_blocked[1][nx_, ny_]:
                         continue
+                    if soft_via is not None and (soft_via[0][nx_, ny_] or soft_via[1][nx_, ny_]):
+                        step += SOFT_COST * 4
                 elif blocked[nl][nx_, ny_] and nb not in goals:
                     continue
+                elif soft is not None and soft[nl][nx_, ny_] and nb not in goals:
+                    step += SOFT_COST
                 nd = base + step
                 if nd < dist.get(nb, INF):
                     dist[nb] = nd
@@ -368,7 +518,7 @@ class Grid:
         return None
 
 
-def path_to_tracks(board: "pcbnew.BOARD", path: Sequence[Cell], net: "pcbnew.NETINFO_ITEM") -> int:
+def path_to_tracks(board: "pcbnew.BOARD", grid: "Grid", path: Sequence[Cell], net: "pcbnew.NETINFO_ITEM") -> int:
     """Turn a simplified path into copper: a track per leg, a via per layer change."""
     added = 0
 
@@ -392,7 +542,7 @@ def path_to_tracks(board: "pcbnew.BOARD", path: Sequence[Cell], net: "pcbnew.NET
             track = pcbnew.PCB_TRACK(board)
             track.SetStart(point(previous))
             track.SetEnd(point(cell))
-            width, _clearance = NET_RULES.get(net.GetNetname(), (TRACK_WIDTH, CLEARANCE)) if net else (TRACK_WIDTH, CLEARANCE)
+            width, _clearance = grid.rules_for(net.GetNetCode()) if net else (TRACK_WIDTH, CLEARANCE)
             track.SetWidth(pcbnew.FromMM(width))
             track.SetLayer(LAYERS[cell[2]])
             track.SetNet(net)
@@ -418,9 +568,8 @@ def route_pad_chain(board: "pcbnew.BOARD", grid: "Grid", net: "pcbnew.NETINFO_IT
         path = grid.route(here, start_layers, target, target_layers, net.GetNetCode())
         if path is None:
             return False
-        total += path_to_tracks(board, path, net)
+        total += path_to_tracks(board, grid, path, net)
         current = nxt
-    print(f"re-routed {net.GetNetname()} from scratch: {total} segments/vias")
     return True
 
 
@@ -440,36 +589,91 @@ def rip_up_and_reroute(
     help, because what is in its way belongs to its neighbour. Everything with
     copper near the stranded pad comes up together, the stranded net is routed
     first, and the rest are put back afterwards.
+
+    Planed nets are the exception. On this board the copper in a stranded
+    pad's way is as often GND or +5V as a signal -- /PLC_LED on U4's pin 41
+    was walled in by a GND via Freerouting put 1mm from the pad -- and
+    re-routing GND "from scratch" as a pad chain would mean threading a track
+    through every ground pad on the board. So a planed neighbour loses only
+    its copper inside the neighbourhood, and is not re-routed here at all: the
+    pieces that cut off show up in the next DRC round as ordinary unconnected
+    pairs, and the plane-stitching repair below closes them with a via to
+    their own plane, which is what that copper was doing anyway.
     """
     victims = [net.GetNetCode()]
+    local_only: List["pcbnew.PCB_TRACK"] = []
+    # Pads per net, for telling a signal (re-routable as a pad chain) from a
+    # sprawling ground-like net that is not. /ST_VSSA -- the ST7580's analog
+    # ground, with the exposed pad and every analog decoupling cap on it --
+    # was the neighbour that could not be put back in rip-up after rip-up
+    # around U4. Nets that large are treated like the planes: only their
+    # local copper comes up, and the cut ends are repaired as gaps.
+    pad_count: Dict[int, int] = {}
+    for footprint in board.GetFootprints():
+        for pad in footprint.Pads():
+            pad_count[pad.GetNetCode()] = pad_count.get(pad.GetNetCode(), 0) + 1
     if near is not None:
         for item in board.GetTracks():
             code = item.GetNetCode()
-            if code in victims or code == 0:
+            if code in victims or code == 0 or item.IsLocked():
                 continue
-            for end in (item.GetStart(), item.GetEnd()):
-                if math.hypot(end.x / 1e6 - near[0], end.y / 1e6 - near[1]) <= radius:
-                    victims.append(code)
-                    break
+            if segment_distance(item, near) > radius:
+                continue
+            if board.FindNet(code).GetNetname() in PLANE_NETS or pad_count.get(code, 0) > MAX_CHAIN_PADS:
+                local_only.append(item)
+            else:
+                victims.append(code)
 
-    doomed = [t for t in board.GetTracks() if t.GetNetCode() in victims]
+    # Locked copper stays: build_pcb.py locks what it places on purpose
+    # (thermal, stitching and fanout vias, fanout stubs), and none of it is
+    # something a pad chain would rebuild.
+    doomed = [t for t in board.GetTracks() if t.GetNetCode() in victims and not t.IsLocked()] + local_only
     for track in doomed:
         board.Remove(track)
 
-    routed = []
-    for code in victims:
-        victim_net = board.FindNet(code)
-        if route_pad_chain(board, grid, victim_net):
-            routed.append(code)
-            continue
-        # Undo everything: the partial results are worse than what was there.
+    # Order matters, and the first order tried is rarely the right one. The
+    # stranded net goes first and takes the shortest way out, which is usually
+    # straight across the neighbour it was competing with: in the first run
+    # with this loop, all four set-aside nets were routed and then lost
+    # because one neighbour (/ST_BR0, /ST_RXD, /ST_CL, /ST_RESETN) could not
+    # get back in. So a victim that fails moves to the front and the whole
+    # set is tried again, until every net has had a turn at the front or an
+    # order repeats.
+    order = list(victims)
+    tried = set()
+    while tuple(order) not in tried:
+        tried.add(tuple(order))
+        routed: List[int] = []
+        failed_code = None
+        for code in order:
+            if route_pad_chain(board, grid, board.FindNet(code)):
+                routed.append(code)
+            else:
+                failed_code = code
+                break
+        if failed_code is None:
+            break
+        # Clear this attempt's copper before the next order: partial results
+        # are worse than what was there.
         for track in list(board.GetTracks()):
-            if track.GetNetCode() in routed or track.GetNetCode() == code:
-                if track not in doomed:
-                    board.Remove(track)
+            if (track.GetNetCode() in routed or track.GetNetCode() == failed_code) and not track.IsLocked():
+                board.Remove(track)
+        order.remove(failed_code)
+        order.insert(0, failed_code)
+    else:
+        name = board.FindNet(order[0]).GetNetname()
+        if near is not None:
+            print(f"  rip-up around ({near[0]:.2f},{near[1]:.2f}): no order of {len(victims)} nets fits ({name} last to fail); undoing")
         for track in doomed:
             board.Add(track)
         return False
+    # Reported only now, once nothing is going to be undone. It used to be
+    # printed per net as each one routed, so a rip-up that was then rolled
+    # back still logged "re-routed /ST_TMS from scratch" -- twice in one run,
+    # for a net that ended the run unrouted.
+    names = ", ".join(board.FindNet(code).GetNetname() for code in routed)
+    where = f" around ({near[0]:.2f},{near[1]:.2f})" if near is not None else ""
+    print(f"re-routed {names} from scratch{where}")
     return True
 
 
@@ -561,7 +765,7 @@ def drop_via_to_plane(
             path = grid.route(origin, origin_layers, (x, y), list(range(len(LAYERS))), net.GetNetCode())
             if path is None:
                 continue
-            added = path_to_tracks(board, path, net)
+            added = path_to_tracks(board, grid, path, net)
             via = pcbnew.PCB_VIA(board)
             via.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(y)))
             via.SetFrontWidth(pcbnew.FromMM(VIA_DIAMETER))
@@ -575,6 +779,294 @@ def drop_via_to_plane(
             )
             return True
     return False
+
+
+def orphan_plane_pads(board: "pcbnew.BOARD") -> List[Tuple["pcbnew.NETINFO_ITEM", "pcbnew.PAD"]]:
+    """Planed-net SMD pads that reach their net through nothing but a sliver.
+
+    A pad counts as connected if a track or via of its net touches it, or if
+    the piece of pour it sits in carries a via of its net. U4's pin 45 had
+    neither: no fanout site, no track from the autorouter, and the F.Cu GND
+    pour around it was a 1.8mm2 island with no via -- which DRC reports as
+    two GND zones unconnected at the zone's corner, 20mm from the pad.
+    """
+    found = []
+    for name in PLANE_NETS:
+        net = board.FindNet(name)
+        if net is None:
+            continue
+        code = net.GetNetCode()
+        copper = [t for t in board.GetTracks() if t.GetNetCode() == code]
+        vias = [t.GetPosition() for t in copper if isinstance(t, pcbnew.PCB_VIA)]
+        fills = []
+        for zone in board.Zones():
+            if zone.GetIsRuleArea() or zone.GetNetCode() != code:
+                continue
+            for layer in LAYERS:
+                if zone.IsOnLayer(layer):
+                    fills.append((layer, zone.GetFilledPolysList(layer)))
+        for footprint in board.GetFootprints():
+            for pad in footprint.Pads():
+                if pad.GetNetCode() != code or pad.GetAttribute() != pcbnew.PAD_ATTRIB_SMD:
+                    continue
+                if any(pad.HitTest(t.GetStart()) or pad.HitTest(t.GetEnd()) for t in copper):
+                    continue
+                pos = pad.GetPosition()
+                fed = False
+                for layer, polys in fills:
+                    if not pad.IsOnLayer(layer):
+                        continue
+                    for i in range(polys.OutlineCount()):
+                        island = pcbnew.SHAPE_POLY_SET()
+                        island.AddOutline(polys.Outline(i))
+                        if island.Contains(pos) or island.Collide(pos, pcbnew.FromMM(0.2)):
+                            if any(island.Contains(v) for v in vias):
+                                fed = True
+                            break
+                if not fed:
+                    found.append((net, pad))
+    return found
+
+
+def clear_island_and_stitch(board: "pcbnew.BOARD", grid: "Grid", net: "pcbnew.NETINFO_ITEM", pad: "pcbnew.PAD") -> bool:
+    """via_in_island(), after lifting the few signal segments in the way.
+
+    The island vouches only for its own layer; on the far side a signal can
+    run straight under it -- /ST_CL on B.Cu under U4 pin 33's GND island --
+    and leave no legal via site at all. So the site is chosen first, among
+    the island's points, as the one that costs the fewest segments, and only
+    the segments that actually come within clearance of it are lifted. Their
+    cut ends are ordinary unconnected pairs for the next rounds. Lifting
+    everything near the island instead took 48 segments of eight nets for one
+    via.
+    """
+    code = net.GetNetCode()
+    island = None
+    for zone in board.Zones():
+        if zone.GetIsRuleArea() or zone.GetNetCode() != code:
+            continue
+        for layer in LAYERS:
+            if not (zone.IsOnLayer(layer) and pad.IsOnLayer(layer)):
+                continue
+            polys = zone.GetFilledPolysList(layer)
+            for i in range(polys.OutlineCount()):
+                candidate = pcbnew.SHAPE_POLY_SET()
+                candidate.AddOutline(polys.Outline(i))
+                if candidate.Contains(pad.GetPosition()) or candidate.Collide(pad.GetPosition(), pcbnew.FromMM(0.2)):
+                    island = candidate
+    if island is None:
+        return False
+
+    liftable, fixed = [], []
+    for item in board.GetTracks():
+        if item.GetNetCode() in (0, code):
+            continue
+        if item.IsLocked() or item.GetNetname() in PLANE_NETS:
+            fixed.append(item)
+        else:
+            liftable.append(item)
+    pad_boxes = []
+    for footprint in board.GetFootprints():
+        for other in footprint.Pads():
+            if other.GetNetCode() != code:
+                box = other.GetBoundingBox()
+                pad_boxes.append((box.GetLeft() / 1e6, box.GetTop() / 1e6, box.GetRight() / 1e6, box.GetBottom() / 1e6))
+
+    def half(item) -> float:
+        return (item.GetWidth(pcbnew.F_Cu) if isinstance(item, pcbnew.PCB_VIA) else item.GetWidth()) / 2e6
+
+    def too_close(item, x: float, y: float) -> bool:
+        clr = ESCAPE_CLEARANCE if grid.in_escape((x, y, x, y)) else CLEARANCE
+        return segment_distance(item, (x, y)) < VIA_DIAMETER / 2 + clr + half(item)
+
+    reach = VIA_DIAMETER / 2 + 0.02
+    box = island.BBox()
+    x0, y0 = pad.GetPosition().x / 1e6, pad.GetPosition().y / 1e6
+    best = None
+    gx = box.GetLeft() / 1e6
+    while gx <= box.GetRight() / 1e6:
+        gy = box.GetTop() / 1e6
+        while gy <= box.GetBottom() / 1e6:
+            probes = [(gx, gy)] + [(gx + reach * math.cos(math.radians(a)), gy + reach * math.sin(math.radians(a)))
+                                   for a in range(0, 360, 30)]
+            if all(island.Contains(pcbnew.VECTOR2I(pcbnew.FromMM(px), pcbnew.FromMM(py))) for px, py in probes):
+                clr = ESCAPE_CLEARANCE if grid.in_escape((gx, gy, gx, gy)) else CLEARANCE
+                r = VIA_DIAMETER / 2 + clr
+                pad_hit = any(l - r < gx < rr + r and t - r < gy < bb + r for l, t, rr, bb in pad_boxes)
+                if not pad_hit and not any(too_close(item, gx, gy) for item in fixed):
+                    blockers = [item for item in liftable if too_close(item, gx, gy)]
+                    key = (len(blockers), math.hypot(gx - x0, gy - y0))
+                    if blockers and (best is None or key < best[0]):
+                        best = (key, gx, gy, blockers)
+            gy += GRID
+        gx += GRID
+    if best is None:
+        return False
+    _key, _x, _y, lifted = best
+    for item in lifted:
+        board.Remove(item)
+    if via_in_island(board, grid, net, pad):
+        names = sorted({item.GetNetname() for item in lifted})
+        print(f"  lifted {len(lifted)} segment(s) of {', '.join(names)} to make room; the cut ends follow as ordinary gaps")
+        return True
+    for item in lifted:
+        board.Add(item)
+    return False
+
+
+def via_in_island(board: "pcbnew.BOARD", grid: "Grid", net: "pcbnew.NETINFO_ITEM", pad: "pcbnew.PAD") -> bool:
+    """Stitch the pour island an orphan pad sits in, anywhere inside it.
+
+    drop_via_to_plane() runs a track from the pad to a via site, which needs
+    an escape lane. U4's pin 33 (GND) has none -- pin 34's +5V fanout stub
+    runs 0.5mm away -- but it does not need one: it already sits in a 3.3mm2
+    island of F.Cu GND pour, and a via anywhere in that island connects it.
+    The pour keeps its own clearance from every other net, so a via whose
+    whole annulus lies inside the island is clear of them by construction;
+    what is left to check is the drill against other holes.
+    """
+    code = net.GetNetCode()
+    pos = pad.GetPosition()
+    island = None
+    for zone in board.Zones():
+        if zone.GetIsRuleArea() or zone.GetNetCode() != code:
+            continue
+        for layer in LAYERS:
+            if not (zone.IsOnLayer(layer) and pad.IsOnLayer(layer)):
+                continue
+            polys = zone.GetFilledPolysList(layer)
+            for i in range(polys.OutlineCount()):
+                candidate = pcbnew.SHAPE_POLY_SET()
+                candidate.AddOutline(polys.Outline(i))
+                if candidate.Contains(pos) or candidate.Collide(pos, pcbnew.FromMM(0.2)):
+                    island = candidate
+                    break
+    if island is None:
+        return False
+    holes = [(v.GetPosition().x / 1e6, v.GetPosition().y / 1e6, v.GetDrillValue() / 1e6)
+             for v in board.GetTracks() if isinstance(v, pcbnew.PCB_VIA)]
+    for footprint in board.GetFootprints():
+        for other in footprint.Pads():
+            if other.GetDrillSizeX() > 0:
+                holes.append((other.GetPosition().x / 1e6, other.GetPosition().y / 1e6,
+                              other.GetDrillSizeX() / 1e6))
+    hole_gap = 0.25  # STACKUP min_hole_to_hole_mm
+    reach = VIA_DIAMETER / 2 + 0.02
+    # The island only vouches for its own layer. The via goes through the
+    # board, so on every other signal layer it is an ordinary via and has to
+    # clear whatever is there -- the first one this placed landed on a
+    # /ST_CL track on B.Cu, 0.035mm away.
+    _blocked, via_blocked = grid.build(code)
+    box = island.BBox()
+    x0, y0 = pos.x / 1e6, pos.y / 1e6
+    sites = []
+    gx = box.GetLeft() / 1e6
+    while gx <= box.GetRight() / 1e6:
+        gy = box.GetTop() / 1e6
+        while gy <= box.GetBottom() / 1e6:
+            sites.append((math.hypot(gx - x0, gy - y0), gx, gy))
+            gy += GRID
+        gx += GRID
+    for _d, x, y in sorted(sites):
+        probes = [(x, y)] + [(x + reach * math.cos(math.radians(a)), y + reach * math.sin(math.radians(a)))
+                             for a in range(0, 360, 30)]
+        if not all(island.Contains(pcbnew.VECTOR2I(pcbnew.FromMM(px), pcbnew.FromMM(py))) for px, py in probes):
+            continue
+        if any(math.hypot(x - hx, y - hy) < VIA_DRILL / 2 + hd / 2 + hole_gap for hx, hy, hd in holes):
+            continue
+        cx, cy = int(round(x / GRID)), int(round(y / GRID))
+        if not (0 <= cx < grid.nx and 0 <= cy < grid.ny) or any(v[cx, cy] for v in via_blocked):
+            continue
+        via = pcbnew.PCB_VIA(board)
+        via.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(y)))
+        via.SetFrontWidth(pcbnew.FromMM(VIA_DIAMETER))
+        via.SetDrill(pcbnew.FromMM(VIA_DRILL))
+        via.SetNet(net)
+        via.SetLayerPair(pcbnew.F_Cu, pcbnew.B_Cu)
+        board.Add(via)
+        ref = pad.GetParentFootprint().GetReference()
+        print(f"stitched {net.GetNetname()} island around {ref} pin {pad.GetNumber()} down at ({x:.2f},{y:.2f})")
+        return True
+    return False
+
+
+def lift_route(
+    board: "pcbnew.BOARD",
+    grid: "Grid",
+    net: "pcbnew.NETINFO_ITEM",
+    start: Tuple[float, float],
+    start_layers: Sequence[int],
+    target: Tuple[float, float],
+    target_layers: Sequence[int],
+) -> bool:
+    """Route through other nets' copper, then lift only what the route crosses.
+
+    The neighbourhood rip-up re-routes every neighbour from scratch as a pad
+    chain, and around U4 that kept failing on the one neighbour that could
+    not get back in -- /ST_VSSA, then /ST_RESETN -- after the stranded net
+    itself had routed. Here the search treats other nets' unlocked copper as
+    passable at a cost, so it finds the route that crosses as little of it as
+    it can; exactly the segments that route comes within clearance of are
+    lifted, and their cut ends become ordinary gaps for the next rounds. Pads,
+    locked copper, keepouts and the board edge stay hard.
+    """
+    code = net.GetNetCode()
+
+    def liftable(item) -> bool:
+        return not item.IsLocked() and item.GetNetCode() not in (0, code)
+
+    path = grid.route(start, start_layers, target, target_layers, code, liftable=liftable)
+    if path is None:
+        return False
+    width, clearance = grid.rules_for(code)
+    legs = [(a, b) for a, b in zip(path, path[1:]) if a[2] == b[2] and a[:2] != b[:2]]
+    vias = [b for a, b in zip(path, path[1:]) if a[2] != b[2]]
+
+    def pt(cell: Cell) -> Tuple[float, float]:
+        return cell[0] * GRID, cell[1] * GRID
+
+    def dist_to_leg(p: Tuple[float, float], a: Cell, b: Cell) -> float:
+        (ax, ay), (bx, by) = pt(a), pt(b)
+        ex, ey = bx - ax, by - ay
+        length_sq = ex * ex + ey * ey
+        t = 0.0 if length_sq == 0 else max(0.0, min(1.0, ((p[0] - ax) * ex + (p[1] - ay) * ey) / length_sq))
+        return math.hypot(p[0] - (ax + t * ex), p[1] - (ay + t * ey))
+
+    lifted = []
+    for item in board.GetTracks():
+        if not liftable(item):
+            continue
+        is_via = isinstance(item, pcbnew.PCB_VIA)
+        half = (item.GetWidth(pcbnew.F_Cu) if is_via else item.GetWidth()) / 2e6
+        layers = [0, 1] if is_via else ([LAYERS.index(item.GetLayer())] if item.GetLayer() in LAYERS else [])
+        if not layers:
+            continue
+        sx, sy = item.GetStart().x / 1e6, item.GetStart().y / 1e6
+        ex, ey = item.GetEnd().x / 1e6, item.GetEnd().y / 1e6
+        steps = max(1, int(math.hypot(ex - sx, ey - sy) / GRID))
+        samples = [(sx + (ex - sx) * i / steps, sy + (ey - sy) * i / steps) for i in range(steps + 1)]
+        rect = (min(sx, ex) - half, min(sy, ey) - half, max(sx, ex) + half, max(sy, ey) + half)
+        clr = min(clearance, ESCAPE_CLEARANCE) if grid.in_escape(rect) else clearance
+        hit = False
+        for a, b in legs:
+            if a[2] in layers and any(dist_to_leg(p, a, b) < half + clr + width / 2 - EPSILON for p in samples):
+                hit = True
+                break
+        if not hit:
+            for v in vias:
+                if any(math.hypot(p[0] - v[0] * GRID, p[1] - v[1] * GRID) < half + clr + VIA_DIAMETER / 2 - EPSILON
+                       for p in samples):
+                    hit = True
+                    break
+        if hit:
+            lifted.append(item)
+    for item in lifted:
+        board.Remove(item)
+    added = path_to_tracks(board, grid, path, net)
+    names = sorted({item.GetNetname() for item in lifted})
+    print(f"finished {net.GetNetname()} through other copper: {added} segments/vias, "
+          f"lifting {len(lifted)} segment(s) of {', '.join(names) or 'nothing'}")
+    return True
 
 
 def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -> Optional[str]:
@@ -623,6 +1115,19 @@ def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -
     start = endpoint(x1, y1)
     target = endpoint(x2, y2)
     if start is None or target is None:
+        # Two zones, not a pad or a track: almost always a planed-net pad
+        # that nothing reached, sitting on its own sliver of pour. KiCad
+        # names the zones and puts both ends on the zone's corner, so the
+        # pad has to be found rather than read off the report.
+        for orphan_net, pad in orphan_plane_pads(board):
+            layers = [i for i, layer in enumerate(LAYERS) if pad.IsOnLayer(layer)] or [0]
+            origin = (pad.GetPosition().x / 1e6, pad.GetPosition().y / 1e6)
+            if drop_via_to_plane(board, grid, orphan_net, origin, layers):
+                return None
+            if via_in_island(board, grid, orphan_net, pad):
+                return None
+            if clear_island_and_stitch(board, grid, orphan_net, pad):
+                return None
         return f"({x1:.2f},{y1:.2f}) -> ({x2:.2f},{y2:.2f}): could not identify both ends"
     net_code, start_layers = start
     _target_net, target_layers = target
@@ -630,7 +1135,7 @@ def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -
 
     path = grid.route((x1, y1), start_layers, (x2, y2), target_layers, net_code)
     if path is not None:
-        added = path_to_tracks(board, path, net)
+        added = path_to_tracks(board, grid, path, net)
         print(
             f"finished {net.GetNetname()} ({x1:.2f},{y1:.2f}) -> ({x2:.2f},{y2:.2f}): "
             f"{added} segments/vias"
@@ -643,8 +1148,28 @@ def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -
     # needed. That copper is not an obstacle to *this* search (same net), but
     # the commitment is already made. So throw it away and start over: this
     # net alone first, then this net together with its neighbours.
-    if rip_up_and_reroute(board, grid, net) or rip_up_and_reroute(board, grid, net, near=(x2, y2)):
+    #
+    # The neighbourhood is searched around *each* end, pad first. It used to
+    # be (x2, y2) only, and DRC does not promise which end of a pair is the
+    # stranded one: every run of REV 0.6 ended with the stranded end first --
+    # U4's pin 39 (/ST_BR1) and pin 41 (/PLC_LED), each walled in on the
+    # QFN's right edge -- while the neighbourhood search looked at the other
+    # end, up to 59mm away, and found nothing worth moving.
+    if rip_up_and_reroute(board, grid, net):
         return None
+    # A planed net's gap is better closed by a via to its plane than by a
+    # track forced through someone else's copper; try that first for those.
+    if net.GetNetname() in PLANE_NETS:
+        for origin, layers in sorted([((x1, y1), start_layers), ((x2, y2), target_layers)],
+                                     key=lambda e: not is_pad(*e[0])):
+            if drop_via_to_plane(board, grid, net, origin, layers):
+                return None
+    if lift_route(board, grid, net, (x1, y1), start_layers, (x2, y2), target_layers):
+        return None
+    ends_by_pad = sorted([(x1, y1), (x2, y2)], key=lambda e: not is_pad(*e))
+    for end in ends_by_pad:
+        if rip_up_and_reroute(board, grid, net, near=end):
+            return None
 
     # Last resort, and on a board with power planes the *correct* answer more
     # often than the ones above: a pad on a planed net does not need a track to
@@ -669,30 +1194,214 @@ def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -
     )
 
 
+def strip_edge_violations(board: "pcbnew.BOARD") -> int:
+    """Delete autorouter copper that breaks the board-edge clearance rule.
+
+    Freerouting is not told about KiCad's 0.5mm copper-to-edge minimum and
+    does not keep it: one run laid /ST_RESETN 0.26mm from the top edge, in
+    three segments, and nothing noticed because no run before this had ever
+    reached the final DRC. Deleting the offending segments turns them into
+    ordinary unconnected pairs, which the loop below then routes with the
+    margin applied.
+    """
+    left, top, right, bottom = board_outline(board)
+    doomed = []
+    for item in board.GetTracks():
+        if item.IsLocked():
+            continue  # placed on purpose by build_pcb.py, which checks its own geometry
+        is_via = isinstance(item, pcbnew.PCB_VIA)
+        half = (item.GetWidth(pcbnew.F_Cu) if is_via else item.GetWidth()) / 2e6
+        for end in (item.GetStart(), item.GetEnd()):
+            x, y = end.x / 1e6, end.y / 1e6
+            if min(x - left, right - x, y - top, bottom - y) - half < BOARD_MARGIN - EPSILON:
+                doomed.append(item)
+                break
+    for item in doomed:
+        print(f"removed {item.GetNetname()} copper within {BOARD_MARGIN}mm of the board edge")
+        # Delete, not Remove: Remove hands the item's ownership to Python,
+        # which has no destructor for it -- see save_refilled().
+        board.Delete(item)
+    return len(doomed)
+
+
+def drc_report(board_path: str) -> dict:
+    with tempfile.NamedTemporaryFile(suffix=".json") as report:
+        subprocess.run(
+            ["kicad-cli", "pcb", "drc", board_path, "--format", "json",
+             "--severity-all", "-o", report.name],
+            check=True, capture_output=True,
+        )
+        return json.load(open(report.name, encoding="utf-8"))
+
+
+def cleanup_targets(report: dict, locked: set) -> List[str]:
+    """UUIDs of leftover copper to delete: what repair and lifting leave behind.
+
+    - track_dangling / via_dangling: a stub with a free end. Lifting cuts
+      tracks, and the re-route does not always come back along the old path.
+    - holes_co_located: the same via placed more than once at one point.
+    - hole_to_hole between two vias of one net: Freerouting likes to drop its
+      own via 0.05mm from a locked fanout via. The copper overlaps, so the
+      spare via adds nothing but a drill hit.
+    Locked items are never targets: build_pcb.py placed them on purpose. That
+    includes U4's exposed-pad thermal vias, which DRC calls dangling because
+    /ST_VSSA has no copper on the far side for them to land on.
+    """
+    doomed = []
+    for violation in report.get("violations", []):
+        kind = violation["type"]
+        items = violation.get("items", [])
+        uuids = [i["uuid"] for i in items]
+        if kind in ("track_dangling", "via_dangling"):
+            doomed += [u for u in uuids if u not in locked]
+        elif kind in ("holes_co_located", "hole_to_hole") and len(items) == 2:
+            nets = [i["description"].split("[", 1)[-1].split("]", 1)[0] for i in items]
+            if nets[0] != nets[1] or not all(i["description"].startswith("Via") for i in items):
+                continue
+            spare = [u for u in uuids if u not in locked]
+            if len(spare) == 2:
+                spare = spare[1:]  # two unlocked duplicates: keep one
+            doomed += spare
+    return sorted(set(doomed))
+
+
+def step_delete(uuids: Sequence[str]) -> None:
+    board = pcbnew.LoadBoard(BOARD_PATH)
+    wanted = set(uuids)
+    for item in list(board.GetTracks()):
+        if item.m_Uuid.AsString() in wanted and not item.IsLocked():
+            board.Delete(item)
+    save_refilled(board, BOARD_PATH)
+
+
+def cleanup() -> None:
+    """Delete leftover copper until a DRC pass finds none."""
+    removed = 0
+    for _pass in range(20):
+        locked_out = subprocess.run(
+            [sys.executable, "-c",
+             "import sys, pcbnew\n"
+             "b = pcbnew.LoadBoard(sys.argv[1])\n"
+             "print('\\n'.join(t.m_Uuid.AsString() for t in b.GetTracks() if t.IsLocked()))\n",
+             BOARD_PATH],
+            check=True, capture_output=True, text=True,
+        ).stdout
+        targets = cleanup_targets(drc_report(BOARD_PATH), set(locked_out.split()))
+        if not targets:
+            break
+        if run_step("--delete", *targets).returncode != 0:
+            sys.exit("cleanup step failed")
+        removed += len(targets)
+    print(f"cleanup: removed {removed} leftover track/via item(s)")
+
+
+def run_step(*args: str) -> subprocess.CompletedProcess:
+    """Run one board-changing step of this script in a fresh interpreter.
+
+    Every step that takes copper off a board leaves KiCad 9's SWIG layer in
+    a state where later boards in the same process come back as bare
+    SwigPyObjects (see save_refilled()). So the loop below never edits a
+    board itself: each step loads, changes, saves and exits, and this process
+    only asks DRC what is left.
+    """
+    result = subprocess.run([sys.executable, __file__, *args], capture_output=True, text=True)
+    for line in result.stdout.splitlines():
+        if not line.startswith("ERROR "):  # reported by the caller as "set aside"
+            print(line)
+    return result
+
+
+def step_strip() -> None:
+    board = pcbnew.LoadBoard(BOARD_PATH)
+    if strip_edge_violations(board):
+        save_refilled(board, BOARD_PATH)
+
+
+def step_repair(pair: Tuple[float, float, float, float]) -> None:
+    board = pcbnew.LoadBoard(BOARD_PATH)
+    error = repair_one(board, pair)
+    if error:
+        print("ERROR " + error)
+        sys.exit(2)
+    save_refilled(board, BOARD_PATH)
+
+
 def main() -> None:
+    if run_step("--strip").returncode != 0:
+        sys.exit("edge-clearance strip failed")
+
     # One repair per round, re-checking with DRC in between. Repairs change
     # the board -- a rip-up can complete several connections at once, or move
     # where the remaining gap is -- so a list of pairs collected up front goes
     # stale after the first fix and produces phantom failures.
-    attempted: set = set()
-    while True:
+    #
+    # A pair that cannot be repaired is set aside, not fatal. This loop used
+    # to stop at the first one, which is why every REV 0.6 run was reported
+    # as "one connection short": that was the first pair the loop could not
+    # close, not the last pair on the board. The board behind one of those
+    # reports still had nine. Closing the others first also changes what is
+    # in the way of the hard one, so after any round that made progress the
+    # set-aside pairs get another try. Only a full pass with no progress at
+    # all is a failure, and then every remaining gap is listed.
+    #
+    # Capped, because a repair is allowed to open gaps as well as close them
+    # -- cutting a planed neighbour's copper is a deliberate example -- and a
+    # loop that only checks for progress could trade the same two gaps back
+    # and forth forever.
+    failed: Dict[Tuple[float, float, float, float], str] = {}
+    best = len(drc_unconnected(BOARD_PATH))
+    for _round in range(MAX_REPAIRS):
         pairs = drc_unconnected(BOARD_PATH)
         if not pairs:
+            # Cleanup deletes only stubs and duplicates, which should never
+            # disconnect anything -- but that is checked, not assumed: if it
+            # did, the loop simply carries on repairing.
+            cleanup()
+            if drc_unconnected(BOARD_PATH):
+                print("cleanup reopened a gap; repairing again")
+                continue
             print("routing complete -- DRC reports no unconnected items")
             return
-        pair = next((p for p in pairs if p not in attempted), None)
+        pair = next((p for p in pairs if p not in failed), None)
         if pair is None:
-            print("could not finish:", *sorted(f"{p}" for p in pairs), sep="\n  ")
+            print(f"could not finish -- {len(pairs)} unconnected:")
+            for p in pairs:
+                print("  " + failed.get(p, f"{p}: not attempted"))
             sys.exit(1)
-        attempted.add(pair)
 
-        board = pcbnew.LoadBoard(BOARD_PATH)
-        error = repair_one(board, pair)
-        if error:
-            print("could not finish:\n  " + error)
-            sys.exit(1)
-        board.Save(BOARD_PATH)
+        result = run_step("--repair", *(repr(v) for v in pair))
+        if result.returncode != 0:
+            errors = [l[len("ERROR "):] for l in result.stdout.splitlines() if l.startswith("ERROR ")]
+            error = errors[0] if errors else f"{pair}: repair step crashed\n{result.stderr[-2000:]}"
+            print("set aside: " + error)
+            failed[pair] = error
+            continue
+        # Progress is fewer gaps than ever before, not a repair that reported
+        # success: those are not the same thing. One run "finished"
+        # /ST_VDD_A's gap six times with copper that never closed it, and
+        # each time cleared the set-aside list and re-ran every expensive
+        # rip-up behind it. A gap a repair claims to have closed but that is
+        # still there is set aside like any other.
+        after = drc_unconnected(BOARD_PATH)
+        if len(after) < best:
+            best = len(after)
+            failed.clear()  # whatever was set aside may have a way through now
+        else:
+            reverse = (pair[2], pair[3], pair[0], pair[1])
+            if pair in after or reverse in after:
+                note = f"{pair}: repaired, but DRC still reports it unconnected"
+                print("set aside: " + note)
+                failed[pair] = failed[reverse] = note
+    print(f"could not finish -- gave up after {MAX_REPAIRS} repair rounds")
+    sys.exit(1)
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:2] == ["--strip"]:
+        step_strip()
+    elif sys.argv[1:2] == ["--delete"]:
+        step_delete(sys.argv[2:])
+    elif sys.argv[1:2] == ["--repair"]:
+        step_repair(tuple(float(v) for v in sys.argv[2:6]))
+    else:
+        main()

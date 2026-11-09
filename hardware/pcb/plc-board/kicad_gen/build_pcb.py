@@ -41,6 +41,7 @@ Regenerate the netlist this script reads with:
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
@@ -167,6 +168,97 @@ NETCLASSES: Dict[str, Tuple[float, float, List[str]]] = {
     "Power_5V": (0.4, 0.2, ["+5V", "/PSU_5V", "/USB_5V"]),
 }
 
+# Fine-pitch escape: a tighter rule, but only around these parts.
+#
+# U4 is a 48-pin 0.5mm-pitch QFN with power pins interleaved among its
+# signals, and at 0.2mm track and 0.2mm clearance its signals cannot get out.
+# Pins 4 and 5 (JTAG) sit between pin 3's +5V fanout via and pin 6's GND via,
+# whose copper edges are 0.9mm apart; two 0.2mm tracks need 1.0mm to pass
+# (two widths, three clearances). They need 0.75mm at 0.15/0.15. Adjacent
+# signals cannot fan out at 45 degrees either: 0.5mm pitch leaves 0.354mm
+# between them, against 0.4mm needed at 0.2/0.2 and 0.3mm at 0.15/0.15. Every
+# routing attempt at 0.2mm ended with one to four of U4's signals unrouted,
+# and only ever U4's.
+#
+# So inside a named rule area around each part listed here, clearance drops
+# to ESCAPE_CLEARANCE (a custom rule in plc-board.kicad_dru), and the nets on
+# the part's signal pins route at ESCAPE_WIDTH (the "Escape" netclass, whose
+# clearance stays 0.2mm everywhere else).
+ESCAPE_AREAS = {"U4": 3.0}   # ref -> margin in mm beyond its courtyard
+ESCAPE_WIDTH = 0.15
+ESCAPE_CLEARANCE = 0.15
+# Kept at the Default width: these carry the PA's current, not a signal. The
+# ST7580's I(VCC)-vs-I(PA_OUT) curve runs to ~500mA, PA_OUT drives the line
+# coupling, and VSSA (the exposed pad's net) is where that current returns.
+ESCAPE_EXCLUDE = ("/ST_PA_OUT", "/ST_VSSA")
+DRU_PATH = "../plc-board.kicad_dru"
+
+
+def escape_area_name(ref: str) -> str:
+    return f"{ref}_ESCAPE"
+
+
+def escape_nets(board: "pcbnew.BOARD") -> List[str]:
+    """Nets on ESCAPE_AREAS parts' pins that no other netclass claims."""
+    claimed = {net for _w, _c, nets in NETCLASSES.values() for net in nets}
+    planed = {name for name, _layer in PLANES}
+    found = set()
+    for ref in ESCAPE_AREAS:
+        fp = board.FindFootprintByReference(ref)
+        for pad in fp.Pads():
+            name = pad.GetNetname()
+            if name and name not in claimed and name not in planed and name not in ESCAPE_EXCLUDE:
+                found.add(name)
+    return sorted(found)
+
+
+def add_escape_areas(board: "pcbnew.BOARD") -> int:
+    """A named rule area per ESCAPE_AREAS part, forbidding nothing.
+
+    It exists only to be named by the custom DRC rule; every other piece of
+    this toolchain that reads rule areas checks what they forbid rather than
+    treating any rule area as a keepout.
+    """
+    for ref, margin in ESCAPE_AREAS.items():
+        boxes = [box for r, box in courtyard_boxes(board) if r == ref]
+        if not boxes:
+            raise SystemExit(f"{ref} has no courtyard -- cannot size its escape area")
+        box = boxes[0]
+        left, top = box.GetLeft() / 1e6 - margin, box.GetTop() / 1e6 - margin
+        right, bottom = box.GetRight() / 1e6 + margin, box.GetBottom() / 1e6 + margin
+        zone = pcbnew.ZONE(board)
+        zone.SetIsRuleArea(True)
+        zone.SetDoNotAllowTracks(False)
+        zone.SetDoNotAllowVias(False)
+        zone.SetDoNotAllowPads(False)
+        zone.SetDoNotAllowCopperPour(False)
+        zone.SetDoNotAllowFootprints(False)
+        layers = pcbnew.LSET()
+        for layer in ALL_COPPER:
+            layers.AddLayer(layer)
+        zone.SetLayerSet(layers)
+        outline = zone.Outline()
+        outline.NewOutline()
+        for x, y in ((left, top), (right, top), (right, bottom), (left, bottom)):
+            outline.Append(mm(x), mm(y))
+        zone.SetZoneName(escape_area_name(ref))
+        board.Add(zone)
+    return len(ESCAPE_AREAS)
+
+
+def write_escape_rules() -> None:
+    """The custom DRC rule behind ESCAPE_AREAS."""
+    rules = ["(version 1)"]
+    for ref in ESCAPE_AREAS:
+        rules.append(
+            f'(rule "{ref} fine-pitch escape"\n'
+            f'  (condition "A.intersectsArea(\'{escape_area_name(ref)}\')")\n'
+            f"  (constraint clearance (min {ESCAPE_CLEARANCE}mm)))"
+        )
+    with open(DRU_PATH, "w", encoding="utf-8") as f:
+        f.write("\n".join(rules) + "\n")
+    print(f"wrote {DRU_PATH} ({len(ESCAPE_AREAS)} escape rules)")
+
 # Reference-designator text nudges, in mm relative to where the footprint puts
 # it by default. Only for the few that land on a neighbour's silkscreen or on
 # exposed copper in this layout -- both are DRC warnings, and both mean the
@@ -177,6 +269,11 @@ REFERENCE_OFFSETS: Dict[str, Tuple[float, float]] = {
     # U2 sits hard against the right edge so its antenna can, and its refdes
     # text lands off the board there. Pulled back inboard.
     "U2": (-5.5, 11.5),
+    # R6 sits 2mm from the top edge now (see PLACEMENT), so its refdes goes
+    # below it rather than off the board; C15's, below it by default, landed
+    # on L2's.
+    "R6": (0.0, 2.9),
+    "C15": (0.0, -2.86),
 }
 
 # Ground pour / stitching geometry
@@ -231,7 +328,7 @@ def parse_netlist(path: str) -> Tuple[Dict[str, CompInfo], Dict[str, List[Tuple[
     return comps, nets
 
 
-def write_project_netclasses() -> None:
+def write_project_netclasses(extra: Dict[str, Tuple[float, float, List[str]]] = None) -> None:
     """Write NETCLASSES into ../plc-board.kicad_pro.
 
     KiCad 7+ stores netclasses in the project file rather than the board, and
@@ -245,7 +342,7 @@ def write_project_netclasses() -> None:
     default = next(c for c in settings["classes"] if c["name"] == "Default")
     classes = [default]
     patterns = []
-    for name, (width, clearance, nets) in NETCLASSES.items():
+    for name, (width, clearance, nets) in {**NETCLASSES, **(extra or {})}.items():
         cls = dict(default)
         cls.update(name=name, track_width=width, clearance=clearance,
                    priority=len(classes))
@@ -260,7 +357,7 @@ def write_project_netclasses() -> None:
     settings["netclass_patterns"] = patterns
     with open(PROJECT_PATH, "w", encoding="utf-8") as f:
         json.dump(project, f, indent=2)
-    print(f"wrote {PROJECT_PATH} ({len(NETCLASSES)} netclasses, {len(patterns)} net assignments)")
+    print(f"wrote {PROJECT_PATH} ({len(classes) - 1} netclasses, {len(patterns)} net assignments)")
 
 
 def add_gnd_zones(board: "pcbnew.BOARD", gnd_net: "pcbnew.NETINFO_ITEM") -> None:
@@ -421,6 +518,12 @@ def make_via(board: "pcbnew.BOARD", net: "pcbnew.NETINFO_ITEM", x_nm: int, y_nm:
     via.SetDrill(mm(VIA_DRILL))
     via.SetNet(net)
     via.SetLayerPair(pcbnew.F_Cu, pcbnew.B_Cu)
+    # Locked: every via made here is placed on purpose -- thermal, stitching,
+    # fanout -- and finish_routing.py's rip-up leaves locked copper alone.
+    # Without that, ripping up /ST_VSSA as a neighbour took U4's sixteen
+    # exposed-pad thermal vias with it, and re-routing the net as a pad chain
+    # would never have put them back.
+    via.SetLocked(True)
     board.Add(via)
 
 
@@ -553,46 +656,195 @@ def add_power_fanout(board: "pcbnew.BOARD", nets: Dict[str, "pcbnew.NETINFO_ITEM
         return all((x - hx) ** 2 + (y - hy) ** 2 >= (need + hd / 2) ** 2
                    for hx, hy, hd in holes)
 
+    # Fanouts already placed, as (net, stub start, via centre). Checked by
+    # real distance, not by the pad-obstacle boxes above: those are squares
+    # 1.1mm across, so two of them demanded 1.1mm between vias that need
+    # 0.8mm (two radii and a clearance), and that alone kept pin 45's GND via
+    # and the 42-44 +5V via, 1.0mm apart, from both existing. The stubs are
+    # checked too, which the boxes never did: a stub running past another
+    # net's via is as much a clearance error as two vias touching.
+    fanouts: List[Tuple[str, List[Tuple["pcbnew.VECTOR2I", "pcbnew.VECTOR2I"]], "pcbnew.VECTOR2I"]] = []
+    via_gap = VIA_DIAMETER + 0.2            # via to via, centre to centre
+    stub_gap = VIA_DIAMETER / 2 + 0.2 + 0.1  # via centre to a 0.2mm stub
+
+    def seg_dist_mm(p: "pcbnew.VECTOR2I", a: "pcbnew.VECTOR2I", b: "pcbnew.VECTOR2I") -> float:
+        ax, ay, bx, by, px, py = a.x / 1e6, a.y / 1e6, b.x / 1e6, b.y / 1e6, p.x / 1e6, p.y / 1e6
+        ex, ey = bx - ax, by - ay
+        length_sq = ex * ex + ey * ey
+        t = 0.0 if length_sq == 0 else max(0.0, min(1.0, ((px - ax) * ex + (py - ay) * ey) / length_sq))
+        return math.hypot(px - (ax + t * ex), py - (ay + t * ey))
+
+    def fanout_clear(name: str, segs, via: "pcbnew.VECTOR2I") -> bool:
+        """`segs` is the stub as a list of (start, end) legs ending at `via`."""
+        for other, o_segs, o_via in fanouts:
+            if other == name:
+                continue
+            if math.hypot((via.x - o_via.x) / 1e6, (via.y - o_via.y) / 1e6) < via_gap:
+                return False
+            if any(seg_dist_mm(o_via, a, b) < stub_gap for a, b in segs):
+                return False
+            if any(seg_dist_mm(via, a, b) < stub_gap for a, b in o_segs):
+                return False
+        return True
+
+    def legs_clear_of_pads(name: str, segs) -> bool:
+        """Each leg keeps the Default clearance from other nets' pads.
+
+        The straight stubs never needed this -- they run out along their own
+        pad's row -- but a dogleg crosses a neighbour's row, so it is checked
+        against every pad by sampling along the leg.
+        """
+        limit = 0.1 + 0.2  # half a 0.2mm stub, plus clearance
+        for a, b in segs:
+            for i in range(21):
+                t = i / 20
+                px = (a.x + (b.x - a.x) * t) / 1e6
+                py = (a.y + (b.y - a.y) * t) / 1e6
+                for box, net in obstacles:
+                    if net == name:
+                        continue
+                    dx = max(box.GetLeft() / 1e6 - px, 0, px - box.GetRight() / 1e6)
+                    dy = max(box.GetTop() / 1e6 - py, 0, py - box.GetBottom() / 1e6)
+                    if math.hypot(dx, dy) < limit:
+                        return False
+        return True
+
+    def add_track(net_name: str, a: "pcbnew.VECTOR2I", b: "pcbnew.VECTOR2I") -> None:
+        track = pcbnew.PCB_TRACK(board)
+        track.SetStart(a)
+        track.SetEnd(b)
+        track.SetWidth(mm(0.2))
+        track.SetLayer(pcbnew.F_Cu)
+        track.SetNet(nets[net_name])
+        track.SetLocked(True)  # part of the fanout, like its via
+        board.Add(track)
+
     placed = 0
     for ref in FANOUT_PARTS:
         fp = board.FindFootprintByReference(ref)
         if fp is None:
             raise SystemExit(f"{ref} not placed -- cannot fan out its power pins")
         centre = fp.GetPosition()
+
+        # Group pads by package edge, then into runs of adjacent pads on the
+        # same net. One via per run, not one per pad.
+        #
+        # One per pad built a wall. A via 1.6mm out on a pad's own row blocks
+        # both neighbouring rows for 1.2mm (via radius, clearance, half a
+        # track), and on U4's right edge the power pads interleave with
+        # signals: 48 47 +5V, 46 VDD_B, 45 GND, 44 43 42 +5V, 41 PLC_LED,
+        # 40 BR0, 39 BR1. Every signal there had a fanout via across its only
+        # way out, and every REV 0.6 run ended on one of them -- pins 39, 40,
+        # 41 and 46, with the top and bottom edges' 4, 9, 23 and 27 not far
+        # behind. A run of same-net pads bridged along the edge and stitched
+        # once from its middle puts the via at least 0.75mm from any other
+        # net's row, which is clear of it.
+        edges: Dict[Tuple[int, int], List["pcbnew.PAD"]] = {}
         for pad in fp.Pads():
-            name = pad.GetNetname()
-            if name not in planed or pad.GetAttribute() != pcbnew.PAD_ATTRIB_SMD:
+            if pad.GetAttribute() != pcbnew.PAD_ATTRIB_SMD or not pad.GetNumber():
                 continue
             pos = pad.GetPosition()
             dx, dy = pos.x - centre.x, pos.y - centre.y
             # Straight out from the package, along whichever axis the pad's
             # own edge faces.
             if abs(dx) > abs(dy):
-                step = (mm(1.0) if dx > 0 else mm(-1.0), 0)
+                step = (1 if dx > 0 else -1, 0)
             else:
-                step = (0, mm(1.0) if dy > 0 else mm(-1.0))
-            for distance in (1.6, 2.0, 2.4, 2.8):
-                vx = pos.x + int(step[0] * distance)
-                vy = pos.y + int(step[1] * distance)
-                spot = pcbnew.BOX2I(pcbnew.VECTOR2I(vx - clear, vy - clear),
-                                    pcbnew.VECTOR2I(2 * clear, 2 * clear))
-                if any(box.Intersects(spot) and net != name for box, net in obstacles):
+                step = (0, 1 if dy > 0 else -1)
+            edges.setdefault(step, []).append(pad)
+
+        for step, edge_pads in edges.items():
+            along = (lambda p: p.GetPosition().y) if step[0] else (lambda p: p.GetPosition().x)
+            edge_pads.sort(key=along)
+            runs: List[List["pcbnew.PAD"]] = []
+            for pad in edge_pads:
+                if (runs and runs[-1][-1].GetNetname() == pad.GetNetname()
+                        and along(pad) - along(runs[-1][-1]) <= mm(0.55)):
+                    runs[-1].append(pad)
+                else:
+                    runs.append([pad])
+
+            # GND last. Two adjacent pads on different planed nets cannot both
+            # fan straight out -- each one's via sits 0.5mm off the other's
+            # stub -- so whichever goes first takes the site. GND can do
+            # without one: the F.Cu pour reaches the outer end of its pad.
+            # +5V has no outer-layer pour and nothing else to fall back on, and
+            # on U4's bottom edge (pins 33 GND, 34 +5V) taking GND first left
+            # pin 34 boxed in by pin 33's via on every routing attempt.
+            runs.sort(key=lambda r: r[0].GetNetname() == "GND")
+            for run in runs:
+                name = run[0].GetNetname()
+                if name not in planed:
                     continue
-                if not hole_clear(vx, vy):
-                    continue
-                make_via(board, nets[name], vx, vy)
-                holes.append((vx, vy, mm(VIA_DRILL)))
-                track = pcbnew.PCB_TRACK(board)
-                track.SetStart(pos)
-                track.SetEnd(pcbnew.VECTOR2I(vx, vy))
-                track.SetWidth(mm(0.2))
-                track.SetLayer(pcbnew.F_Cu)
-                track.SetNet(nets[name])
-                board.Add(track)
-                obstacles.append((pcbnew.BOX2I(pcbnew.VECTOR2I(vx - clear, vy - clear),
-                                               pcbnew.VECTOR2I(2 * clear, 2 * clear)), name))
-                placed += 1
-                break
+                first, last = run[0].GetPosition(), run[-1].GetPosition()
+                # The stub leaves from the middle of the run: a pad centre for
+                # an odd run, the bridge between the two middle pads for an
+                # even one.
+                origin = pcbnew.VECTOR2I((first.x + last.x) // 2, (first.y + last.y) // 2)
+
+                def at(base: "pcbnew.VECTOR2I", out_mm: float, side_mm: float = 0.0) -> "pcbnew.VECTOR2I":
+                    # `out` along the edge's outward step, `side` along the edge.
+                    lateral = (0, 1) if step[0] else (1, 0)
+                    return pcbnew.VECTOR2I(base.x + int(step[0] * mm(out_mm) + lateral[0] * mm(side_mm)),
+                                           base.y + int(step[1] * mm(out_mm) + lateral[1] * mm(side_mm)))
+
+                # Straight out first. Failing that, a dogleg into an unused
+                # neighbour's row: out just past the pad end, 45 degrees across
+                # one pitch, then out to the via. Only towards a pad with no
+                # net -- that row carries no escaping signal to block. U4's pin
+                # 33 (GND) needs it: pin 34's +5V via is 0.5mm away, but pin 32
+                # is NC, and its row is free.
+                candidates = [[origin, at(origin, d)] for d in (1.6, 2.0, 2.4, 2.8)]
+                if len(run) == 1:
+                    idx = edge_pads.index(run[0])
+                    for side in (-1, 1):
+                        j = idx + side
+                        if not 0 <= j < len(edge_pads):
+                            continue
+                        other = edge_pads[j].GetNetname()
+                        if other and not other.startswith("unconnected-"):
+                            continue
+                        pitch = (along(edge_pads[j]) - along(run[0])) / 1e6
+                        knee = at(origin, 0.5)
+                        # Half a pitch first: on U4's bottom edge pin 33 sits
+                        # between pin 31's and pin 34's +5V stubs, 1.5mm
+                        # apart, and the one place a via clears both is
+                        # midway. A full pitch would put it 0.5mm from pin
+                        # 31's stub.
+                        for frac in (0.5, 1.0):
+                            across = at(knee, abs(pitch) * frac, pitch * frac)
+                            candidates += [[origin, knee, across, at(across, d)] for d in (0.4, 0.6, 0.8, 1.2, 1.6)]
+                for points in candidates:
+                    v = points[-1]
+                    vx, vy = v.x, v.y
+                    segs = list(zip(points, points[1:]))
+                    spot = pcbnew.BOX2I(pcbnew.VECTOR2I(vx - clear, vy - clear),
+                                        pcbnew.VECTOR2I(2 * clear, 2 * clear))
+                    if any(box.Intersects(spot) and net != name for box, net in obstacles):
+                        continue
+                    if not hole_clear(vx, vy):
+                        continue
+                    if not fanout_clear(name, segs, v):
+                        continue
+                    if len(points) > 2 and not legs_clear_of_pads(name, segs[1:]):
+                        continue
+                    make_via(board, nets[name], vx, vy)
+                    holes.append((vx, vy, mm(VIA_DRILL)))
+                    if len(run) > 1:
+                        add_track(name, first, last)
+                    for a, b in segs:
+                        add_track(name, a, b)
+                    fanouts.append((name, segs, v))
+                    placed += 1
+                    break
+                else:
+                    # Not fatal -- the router can still reach the plane from
+                    # here -- but no longer silent. Three of U4's thirteen
+                    # power pads used to go without a fanout and nothing said
+                    # so; pin 45 then came back from routing as a GND pad
+                    # joined to nothing but a 1.8mm2 sliver of F.Cu pour.
+                    pins = ",".join(p.GetNumber() for p in run)
+                    print(f"note: no fanout site for {ref} pin(s) {pins} ({name}); left to the router")
     return placed
 
 
@@ -623,9 +875,9 @@ def add_stitching_vias(board: "pcbnew.BOARD", gnd_net: "pcbnew.NETINFO_ITEM") ->
 
     # Rule areas -- the isolation band and the antenna keepout -- forbid vias
     # outright. DRC reports a via inside one as items_not_allowed.
-    rule_areas = [z for z in board.Zones() if z.GetIsRuleArea()]
+    rule_areas = [z for z in board.Zones() if z.GetIsRuleArea() and z.GetDoNotAllowVias()]
     for fp in board.GetFootprints():
-        rule_areas += [z for z in fp.Zones() if z.GetIsRuleArea()]
+        rule_areas += [z for z in fp.Zones() if z.GetIsRuleArea() and z.GetDoNotAllowVias()]
 
     # Copper obstacles are tested as (start, end, half-width) segments rather
     # than bounding boxes. A diagonal track's bounding box is a poor stand-in
@@ -701,6 +953,54 @@ def courtyard_boxes(board: "pcbnew.BOARD") -> List[Tuple[str, "pcbnew.BOX2I"]]:
     return boxes
 
 
+# Exposed pads whose net is not a plane's: a copper island of the pad's own net
+# under the part, on the inner GND layer and on B.Cu, for its thermal vias to
+# land on. ref -> (pad number, margin in mm beyond the pad).
+#
+# U4's exposed pad is ST_VSSA, not GND. ST7580 datasheet Table 2: "Electrically
+# connected to VSSA. It is recommended that the exposed pad be thermally
+# connected to a copper ground plane"; Figure 9 ties it to VSSA and VSS and
+# reaches GND only through a ferrite bead. And Table 5's 50 C/W is "mounted on
+# a 2-side + vias PCB with a ground dissipating area on the bottom side". So
+# the area the vias need is VSSA, and until REV 0.7 there was none: the plane
+# under them is GND, which cut clearance around all sixteen, and DRC called
+# them dangling. 0.5mm past the pad keeps each island inside U4's own pin
+# ring, clear of the GND and +5V fanout vias that sit 1.6mm outside it.
+THERMAL_ISLANDS = {"U4": ("49", 0.5)}
+THERMAL_ISLAND_LAYERS = (pcbnew.In1_Cu, pcbnew.B_Cu)
+
+
+def add_thermal_islands(board: "pcbnew.BOARD", nets: Dict[str, "pcbnew.NETINFO_ITEM"]) -> int:
+    count = 0
+    for ref, (pad_number, margin) in THERMAL_ISLANDS.items():
+        fp = board.FindFootprintByReference(ref)
+        pad = next((p for p in fp.Pads() if p.GetNumber() == pad_number), None)
+        if pad is None:
+            raise SystemExit(f"{ref} has no pad {pad_number} -- cannot add its thermal island")
+        net = nets.get(pad.GetNetname())
+        box = pad.GetBoundingBox()
+        left, top = box.GetLeft() / 1e6 - margin, box.GetTop() / 1e6 - margin
+        right, bottom = box.GetRight() / 1e6 + margin, box.GetBottom() / 1e6 + margin
+        for layer in THERMAL_ISLAND_LAYERS:
+            zone = pcbnew.ZONE(board)
+            zone.SetLayer(layer)
+            zone.SetNet(net)
+            zone.SetIsFilled(False)
+            # Above the GND pour and the GND plane, which flow around it.
+            zone.SetAssignedPriority(10)
+            zone.SetPadConnection(pcbnew.ZONE_CONNECTION_FULL)
+            zone.SetLocalClearance(mm(0.2))
+            zone.SetMinThickness(mm(0.2))
+            zone.SetZoneName(f"thermal-{ref}")
+            outline = zone.Outline()
+            outline.NewOutline()
+            for x, y in ((left, top), (right, top), (right, bottom), (left, bottom)):
+                outline.Append(mm(x), mm(y))
+            board.Add(zone)
+            count += 1
+    return count
+
+
 def pour_ground(board_path: str) -> None:
     """Add the GND pours, stitch them, and fill -- on an already-routed board.
 
@@ -734,7 +1034,9 @@ def pour_ground(board_path: str) -> None:
         raise SystemExit("board already has ground zones -- regenerate it with build_pcb.py first")
 
     add_gnd_zones(board, gnd)
-    add_plane_zones(board, {n.GetNetname(): n for n in board.GetNetInfo().NetsByName().values()})
+    nets_by_name = {n.GetNetname(): n for n in board.GetNetInfo().NetsByName().values()}
+    add_plane_zones(board, nets_by_name)
+    add_thermal_islands(board, nets_by_name)
     stitches = add_stitching_vias(board, gnd)
     board.BuildConnectivity()
     copper_zones = [z for z in board.Zones() if not z.GetIsRuleArea()]
@@ -907,8 +1209,13 @@ STACKUP = {
     "thickness_mm": 1.6,
     "copper_weight_outer_oz": 1,
     "copper_weight_inner_oz": 0.5,
-    "min_track_mm": 0.2,
-    "min_clearance_mm": 0.2,
+    # The process floor, not the design rule: the Default netclass is still
+    # 0.2mm/0.2mm and governs everything outside ESCAPE_AREAS. This is 0.15
+    # so the U4 escape rule below is legal at all -- KiCad holds every rule,
+    # custom ones included, to these minimums. JLCPCB's standard four-layer
+    # process goes to 0.09mm, so 0.15mm is not a special order.
+    "min_track_mm": 0.15,
+    "min_clearance_mm": 0.15,
     "min_via_diameter_mm": 0.6,
     "min_via_drill_mm": 0.3,
     "min_hole_to_hole_mm": 0.25,
@@ -1026,7 +1333,11 @@ PLACEMENT: Dict[str, Tuple[float, float, float, str]] = {
     "C16": (47.0, 6.0, 0, "10uF/50V X5R"),  # DC block into T1's primary
     "R20": (49.0, 10.28, 0, "150R"),        # Rx series resistor
     "L2": (47.0, 14.0, 0, "150uH"),         # Rx resonant inductor
-    "C15": (52.5, 3.77, 0, "12nF"),        # Rx resonant capacitor
+    # Beside R20 and L2, the rest of the Rx tank (RX_IN is U4's pin 19, on
+    # its *left* edge). It used to sit at (52.5, 3.77), across the top of the
+    # QFN's pins 9-12, where it did nothing for the tank and closed off the
+    # band those pins escape through -- see R6 below.
+    "C15": (45.6, 10.28, 180, "12nF"),     # Rx resonant capacitor
     "C13": (57.0, 16.27, 0, "68pF C0G"),     # Sallen-Key feedback cap
     "C14": (49.0, 20.77, 0, "68pF C0G"),    # Sallen-Key shunt cap
     "R18": (58.0, 19.27, 0, "33k"),          # PA gain, feedback leg
@@ -1045,12 +1356,20 @@ PLACEMENT: Dict[str, Tuple[float, float, float, str]] = {
     "C4": (53.5, 20.77, 0, "100nF"),         # VDD_REG_1V8
     "C5": (68.0, 11.78, 0, "100nF"),        # VDD_PLL
     "C6": (63.22, 9.03, 0, "1uF"),          # VCCA
-    "C11": (52.5, 17.6, 0, "100nF"),       # VCC (12V) local decoupling
+    "C11": (52.5, 17.6, 0, "100nF"),       # VCC (12V) local decoupling, to VSS
     "FB1": (48.3, 17.6, 0, "FB"),          # VSSA-to-GND bridge
     "FB2": (61.77, 3.4, 0, "FB"),          # VDD_A to VDD_PLL
-    "R6": (57.0, 3.77, 0, "10k"),          # RESETN pull-up
-    # BR0 and BR1 are adjacent pads on the QFN's top edge (40 and 39, at
-    # x=57.25 and 57.75, y=6.55), so both escape upwards. R8 used to sit at
+    # Out of the way of U4's top edge. At (57.0, 3.77) R6 sat 0.4mm above
+    # pins 3-8, leaving a 1.35mm band between the package and its own pads
+    # for two fanout vias (pins 3 and 6) and the five JTAG signals plus
+    # RESETN on their way right to J3. Every routing attempt with this
+    # placement ended with one of those six unrouted -- /ST_TDI, /ST_TMS,
+    # /ST_TRSTN, /ST_RESETN, sometimes two at once. Up here, left of the
+    # pins, RESETN (pin 10) reaches it in a few millimetres and the band
+    # above the fanout vias is open.
+    "R6": (50.5, 2.0, 0, "10k"),           # RESETN pull-up
+    # BR0 and BR1 are adjacent pads on the QFN's right edge (40 and 39, at
+    # x=59.45, y=11.25 and 11.75), so both escape rightwards. R8 used to sit at
     # (66, 15.78), below and right of the chip, which asked /ST_BR0 to travel
     # around the whole east face of a 48-pin 0.5mm-pitch package. Freerouting
     # could not place it and neither could the repair router. Its pull-up now
@@ -1074,7 +1393,7 @@ PLACEMENT: Dict[str, Tuple[float, float, float, str]] = {
     "D8": (79.02, 42.8, 0, "SS34"),         # boost rectifier
     "C1": (68.78, 50.8, 0, "220uF"),         # HLK output bulk
     "C7": (68.77, 39.79, 0, "1F 5.5V"),       # supercapacitor hold-up
-    "C10": (71.42, 25.95, 0, "100uF"),        # +5V bulk
+    "C10": (71.42, 25.95, 0, "100uF"),        # +12V bulk (the boost output, not +5V)
     "R11": (47.8, 37.67, 0, "10R"),         # supercapacitor inrush limit
     "C8": (60.82, 51.2, 0, "22uF"),         # boost input
     "C9": (60.82, 55.2, 0, "22uF"),         # boost output
@@ -1198,13 +1517,16 @@ def main() -> None:
     # After placement, because the antenna keepout's geometry comes from U2.
     keepouts = add_keepout_zones(board)
     fanout = add_power_fanout(board, net_objs)
+    escape = add_escape_areas(board)
+    escape_netclass = {"Escape": (ESCAPE_WIDTH, 0.2, escape_nets(board))}
 
 
     out_path = "../plc-board.kicad_pcb"
     board.Save(out_path)
-    print(f"wrote {out_path} ({len(comps)} components, {len(nets)} nets, {thermal} thermal vias, {keepouts} keepout zones, {fanout} power fanouts)")
+    print(f"wrote {out_path} ({len(comps)} components, {len(nets)} nets, {thermal} thermal vias, {keepouts} keepout zones, {fanout} power fanouts, {escape} escape areas)")
 
-    write_project_netclasses()
+    write_project_netclasses(escape_netclass)
+    write_escape_rules()
 
 
 if __name__ == "__main__":

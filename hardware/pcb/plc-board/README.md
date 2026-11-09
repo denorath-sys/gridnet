@@ -1,6 +1,133 @@
 GRIDNET — PLC/Power Board KiCad Schematic + PCB
-REV 0.6 (Board 1, the PLC Adapter's own PCB — see "Board 1 is the PLC
+REV 0.7 (Board 1, the PLC Adapter's own PCB — see "Board 1 is the PLC
 Adapter's PCB" below.)
+
+What changed in REV 0.7
+------------------------
+
+**The board is routed.** `route.sh` now runs from placement to a finished
+board: 753 track segments and 173 vias over F.Cu and B.Cu, both planes
+poured, DRC **0 errors, 0 warnings, 0 unconnected**, and
+`check_isolation_barrier()` clean on copper.
+
+**U4's grounding now follows the ST7580 datasheet** (DocID022644 Rev 2), read
+for this pass rather than assumed:
+
+- **C11 decouples VCC to VSS, not GND.** Figure 8 draws VCC's capacitor to
+  VSS, and "all supply voltages must be properly filtered to their respective
+  ground". C11 went to GND, which put the PA's supply loop — up to 1 A,
+  I(PA_OUT)MAX — through FB1, the ferrite Figure 9 puts between VSS and GND.
+  Every other supply capacitor already matched Figure 8.
+- **The exposed pad's thermal vias land on copper.** Table 2: the pad is
+  "electrically connected to VSSA" and should be "thermally connected to a
+  copper ground plane"; Table 5's 50 °C/W is "mounted on a 2-side + vias PCB
+  with a ground dissipating area on the bottom side". The plane under it is
+  GND, so its sixteen vias were cut out of it and DRC called them dangling.
+  The pour step now adds a VSSA island under the pad, inside U4's pin ring,
+  on In1.Cu (37 mm²) and B.Cu (28 mm², less where escape routes cross).
+- **Tying the pad to GND directly would have been wrong.** Figure 9 joins the
+  exposed pad, VSSA and VSS, and reaches GND only through a ferrite bead —
+  which is what the schematic already did.
+- **FB1 carries the PA's DC return** (the 12V boost is GND-referenced), so
+  `hardware/bom.md` now asks for ≥1.5 A and low DC resistance.
+
+Also: `route.sh` bounds Freerouting with `FREEROUTING_TIMEOUT` (300 s) and
+treats a run that writes no session as a failed attempt. The same DSN that
+finished in 17 s on one run sat for ten minutes on the next, and the import
+of nothing used to hand all 172 nets to the repair router.
+
+REV 0.6 reported every run ending "one connection short". That was wrong, and
+the reason it was wrong is the first thing this pass found:
+
+**`finish_routing.py` stopped at the first pair it could not repair.** So
+"one short" was the first hard gap, not the last — the board behind one such
+report still had nine. The loop now sets a hard pair aside, works the rest,
+retries set-aside pairs whenever the gap count falls below its best so far,
+and lists every remaining gap when it gives up. Counting progress as "fewer
+gaps than ever" rather than "a repair reported success" matters: one run
+"finished" the same `/ST_VDD_A` gap six times with copper that never closed
+it.
+
+Once the real list was visible, every remaining gap was on **U4, the ST7580**
+— a 48-pin 0.5mm-pitch QFN with its power pins interleaved among signals —
+and the causes were in this toolchain and this placement, not in luck:
+
+- **The repair rip-up looked at the wrong end.** It searched for neighbours to
+  move around the pair's *second* end; on every REV 0.6 run the stranded end
+  was the first (U4 pins 39 and 41).
+- **The power fanout walled in the signals.** One via per power pad, in line,
+  1.6mm out: each blocked both neighbouring rows, and on U4's right edge
+  (48 47 +5V, 46 VDD_B, 45 GND, 44 43 42 +5V, 41 40 39 signals) every signal
+  had one across its only way out. Adjacent same-net pads now share one
+  bridged via from the run's middle; spacing is checked by real distance,
+  stubs included; +5V goes before GND (GND has the F.Cu pour to fall back on);
+  a pad boxed in on both sides can dogleg into an unused neighbour's row (U4
+  pin 33, between two +5V stubs, lands its via beside NC pin 32); and a pad
+  left without a fanout is reported. It used to skip three of U4's thirteen
+  silently; pin 45 then came back from routing joined to nothing but a 1.8mm²
+  sliver of pour.
+- **R6 and C15 sat on top of U4's pin field.** R6 was 0.4mm above pins 3–8,
+  leaving 1.35mm for two fanout vias and the five JTAG signals plus RESETN on
+  their way to J3. C15 sat across pins 9–12, far from the Rx tank it belongs
+  to (RX_IN is pin 19, on the *left* edge). R6 moved up and left of the pins;
+  C15 moved beside R20 and L2.
+- **0.2mm track and 0.2mm clearance cannot get U4's signals out.** Pins 4 and
+  5 sit between pin 3's +5V via and pin 6's GND via, whose copper is 0.9mm
+  apart; two tracks need 1.0mm. Adjacent pins cannot fan out at 45° either
+  (0.354mm between them, 0.4mm needed). So there is now a **fine-pitch escape
+  rule, around U4 only**: a named rule area `U4_ESCAPE` (courtyard + 3mm) and
+  a custom rule in `plc-board.kicad_dru` drop clearance to 0.15mm inside it,
+  and U4's signal nets form an `Escape` netclass routed at 0.15mm. Everything
+  else stays at 0.2/0.2, which DRC was checked to still enforce outside the
+  area. `PA_OUT` and `VSSA` stay at Default width — they carry the PA's
+  current. The process minimum in `STACKUP` drops to 0.15mm so the rule is
+  legal; JLCPCB's standard four-layer process goes to 0.09mm.
+
+And the repair router learned to finish:
+
+- **Route through, lift only what is crossed.** Re-routing every neighbour
+  from scratch as a pad chain kept failing on the one neighbour that could not
+  get back in. `lift_route()` instead runs A* with other nets' unlocked copper
+  passable at a cost, then lifts exactly the segments the result comes within
+  clearance of; the cut ends are repaired as ordinary gaps. Neighbours with
+  more than six pads (`/ST_VSSA`) are cut locally rather than re-routed.
+- **Orphan pads.** A planed pad on its own pour island with no via is found
+  and stitched — from the pad if it can escape, else anywhere inside the
+  island, lifting the one or two segments in the chosen spot's way.
+- **Locked copper.** Every via and stub `build_pcb.py` places is locked, and
+  repair never touches locked copper. Before this, ripping up `/ST_VSSA` as a
+  neighbour removed U4's sixteen thermal vias, which nothing would have put
+  back. The locks survive the Freerouting round trip.
+- **The board edge.** Freerouting does not keep KiCad's 0.5mm copper-to-edge
+  rule (it laid `/ST_RESETN` 0.26mm from the top edge), so offending
+  autorouter copper is removed and re-routed. The repair router's own margin
+  now includes the copper's half-width and is measured from the Edge.Cuts
+  geometry; `GetBoardEdgesBoundingBox()` includes the outline's line width and
+  sat 0.075mm outside the real edge, and on the right and bottom the margin was
+  counted from the end of a grid 1mm larger than the board.
+- **Zones are refilled after every repair**, since the pour now comes before
+  repair, and **a cleanup pass** deletes what repair leaves behind (dangling
+  stubs, duplicate vias, Freerouting's via 0.05mm off a locked fanout via),
+  driven by DRC's own UUIDs, then re-checks that nothing came apart.
+- **Each repair step runs in a fresh Python process.** Once copper has been
+  taken off a board, KiCad 9's SWIG layer hands back any later board's objects
+  as bare `SwigPyObject`s and segfaults on exit. `route.sh` can also keep each
+  failed attempt's board (`KEEP_FAILED=dir`); the next attempt's placement
+  used to overwrite it.
+
+Two more corrections: `route.sh` drops the escape area from the DSN (KiCad's
+Specctra exporter writes every rule area as a keepout, which would have fenced
+Freerouting out of exactly that region), and rule areas are now honoured by
+what they forbid rather than by being rule areas at all.
+
+The routed board came from the first attempt of the run that produced it, but
+attempts differ — Freerouting is not deterministic — and earlier runs with
+only some of these changes needed several. This was produced with KiCad 9.0.3
+and Freerouting 2.2.4 on Java 25; KiCad 9.0.3 reproduces the REV 0.6 placement
+exactly (same parts, nets, vias and zones), and reports 475 ERC warnings, 0
+errors, on the REV 0.6 schematic where REV 0.6 quoted 350 — a version
+difference, the same count either side of a regeneration. With C11 moved to
+VSS it reports 473 warnings, 0 errors.
 
 What changed in REV 0.6
 ------------------------
@@ -136,7 +263,7 @@ not rediscovered:
   instead of a track to another pad — which on a planed net is usually the
   correct answer and is what Freerouting itself does.
 
-Routing is **not finished**; see "What's not done yet".
+Routing was **not finished** at REV 0.6; it is in REV 0.7.
 
 What changed in REV 0.4
 ------------------------
@@ -548,34 +675,22 @@ What's not done yet
   synchronise to. AN4068's circuit is recorded in docs/plc-coupling.md if
   it is ever wanted; note that its Figure 14 could not be read, so the
   block cannot be built from that list alone.
-- **Routing.** The pipeline runs end to end and gets close — 152 unrouted
-  down to 4-8 from the autorouter, with the repair step closing most of what
-  is left (`+5V`, `/ST_PA_OUT`, `/AC_N`, `/PLC_LINE`, `/ST_TMS`,
-  `/ST_VDD_REG_1V8` across runs) — but no run has produced a complete board.
-  Each ends holding one connection.
-
-  Two specific things stand in the way, both in `finish_routing.py` rather
-  than in the design:
-
-  - **`drop_via_to_plane()` reports success without checking it helped.** It
-    stitched the same point three times in one run: it finds a legal via site,
-    returns True, DRC reports the same pair unconnected, and it stitches
-    again. It also chose a site 0.1mm from pin 48's pad — same net, so it
-    added nothing. It needs to verify the reported connection actually closed,
-    and to stitch the endpoint that is a *pad* rather than whichever end comes
-    first.
-  - **U4 pin 3 (VDDIO, left edge) has no reachable via site.** The pad sits
-    directly over solid +5V plane copper — confirmed, the filled polygon
-    contains its coordinates — so the connection it needs is a via, not a
-    track. There is no legal site within the helper's 6mm search, which is a
-    congestion problem on the QFN's left edge, not a search-radius one.
-
-  Everything else the routing pass needed is in place and verified: the DSN
-  carries the barrier as a `keepout` on all four layers, the repair router
-  respects rule areas, and `check_isolation_barrier()` now runs on copper —
-  pads, tracks, vias and filled zone polygons — where it has already caught
-  one real defect (stitching vias hanging 0.3mm into the band, because the
-  grid started at `SELV_MIN` and a via has a radius).
+- ~~**Routing.**~~ Done in REV 0.7 — see above. What it still needs is a
+  person looking at it: the copper is autorouted and machine-repaired, DRC
+  checks rules rather than judgement, and the analog section around U4 (the
+  Rx tank, the Sallen-Key cell, `VSSA`) deserves a human pass on loop areas
+  before fabrication.
+- ~~**U4's exposed-pad thermal vias land on nothing.**~~ Closed in REV 0.7:
+  VSSA islands under the pad on In1.Cu and B.Cu (see above). Whether 37 mm²
+  inside the pin ring dissipates as well as the datasheet's "ground
+  dissipating area on the bottom side" is not established — that area's
+  size is not given — and wants a thermal check on the prototype under
+  sustained transmit.
+- **`FB1`'s part.** The BOM now states the requirement (≥1.5 A, low DCR),
+  but no part is chosen.
+- **The escape rule against the fab's numbers.** 0.15mm/0.15mm inside
+  `U4_ESCAPE` is well inside JLCPCB's standard four-layer process (0.09mm),
+  but confirm it against whichever house actually builds the board.
 - ~~The pour sliver past the antenna keepout~~ — closed in REV 0.5. A second
   rule area now covers the strip between `U2`'s antenna keepout and the right
   board edge, on all four layers.
