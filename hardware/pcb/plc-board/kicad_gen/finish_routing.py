@@ -92,6 +92,27 @@ def segment_distance(item: "pcbnew.PCB_TRACK", point: Tuple[float, float]) -> fl
     return math.hypot(point[0] - (ax + t * ex), point[1] - (ay + t * ey))
 
 
+def board_outline(board: "pcbnew.BOARD") -> Tuple[float, float, float, float]:
+    """(left, top, right, bottom) in mm of the Edge.Cuts geometry itself.
+
+    Not GetBoardEdgesBoundingBox(), which includes the outline's drawn line
+    width and so sits 0.05mm outside the real edge on every side. Measured
+    from that, a Freerouting track 0.465mm from the top edge passed the
+    0.5mm check, and the repair router itself laid track 0.45mm from it --
+    six times over, each one "finishing" a gap it had not closed.
+    """
+    xs, ys = [], []
+    for item in board.GetDrawings():
+        if item.GetLayer() != pcbnew.Edge_Cuts:
+            continue
+        for point in (item.GetStart(), item.GetEnd()):
+            xs.append(point.x / 1e6)
+            ys.append(point.y / 1e6)
+    if not xs:
+        raise SystemExit("board has no Edge.Cuts outline")
+    return min(xs), min(ys), max(xs), max(ys)
+
+
 def refill_zones(board: "pcbnew.BOARD") -> None:
     """Re-pour every copper zone around whatever copper is on the board now.
 
@@ -310,9 +331,7 @@ class Grid:
         # end of the grid, which is built 1mm larger than the board: on the
         # right and bottom the blocked strip lay off the board entirely and
         # the router could run copper up to the outline.
-        outline = self.board.GetBoardEdgesBoundingBox()
-        left, top = outline.GetLeft() / 1e6, outline.GetTop() / 1e6
-        right, bottom = outline.GetRight() / 1e6, outline.GetBottom() / 1e6
+        left, top, right, bottom = board_outline(self.board)
         for grids, half in ((blocked, width / 2), (via_blocked, VIA_DIAMETER / 2)):
             margin = BOARD_MARGIN + half
             lo_x = int(math.ceil((left + margin) / GRID - EPSILON))
@@ -862,9 +881,7 @@ def strip_edge_violations(board: "pcbnew.BOARD") -> int:
     ordinary unconnected pairs, which the loop below then routes with the
     margin applied.
     """
-    outline = board.GetBoardEdgesBoundingBox()
-    left, top = outline.GetLeft() / 1e6, outline.GetTop() / 1e6
-    right, bottom = outline.GetRight() / 1e6, outline.GetBottom() / 1e6
+    left, top, right, bottom = board_outline(board)
     doomed = []
     for item in board.GetTracks():
         if item.IsLocked():
@@ -938,6 +955,7 @@ def main() -> None:
     # loop that only checks for progress could trade the same two gaps back
     # and forth forever.
     failed: Dict[Tuple[float, float, float, float], str] = {}
+    best = len(drc_unconnected(BOARD_PATH))
     for _round in range(MAX_REPAIRS):
         pairs = drc_unconnected(BOARD_PATH)
         if not pairs:
@@ -957,8 +975,22 @@ def main() -> None:
             print("set aside: " + error)
             failed[pair] = error
             continue
-        # Progress: whatever was set aside may have a way through now.
-        failed.clear()
+        # Progress is fewer gaps than ever before, not a repair that reported
+        # success: those are not the same thing. One run "finished"
+        # /ST_VDD_A's gap six times with copper that never closed it, and
+        # each time cleared the set-aside list and re-ran every expensive
+        # rip-up behind it. A gap a repair claims to have closed but that is
+        # still there is set aside like any other.
+        after = drc_unconnected(BOARD_PATH)
+        if len(after) < best:
+            best = len(after)
+            failed.clear()  # whatever was set aside may have a way through now
+        else:
+            reverse = (pair[2], pair[3], pair[0], pair[1])
+            if pair in after or reverse in after:
+                note = f"{pair}: repaired, but DRC still reports it unconnected"
+                print("set aside: " + note)
+                failed[pair] = failed[reverse] = note
     print(f"could not finish -- gave up after {MAX_REPAIRS} repair rounds")
     sys.exit(1)
 
