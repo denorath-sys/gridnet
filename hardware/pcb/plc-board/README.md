@@ -6,10 +6,35 @@ What changed in REV 0.7
 ------------------------
 
 **The board is routed.** `route.sh` now runs from placement to a finished
-board: 742 track segments and 174 vias over F.Cu and B.Cu, both planes
-poured, DRC **0 errors, 0 unconnected**, and `check_isolation_barrier()`
-clean on copper. The two DRC warnings left are U4's exposed-pad thermal vias
-(see "What's not done yet").
+board: 753 track segments and 173 vias over F.Cu and B.Cu, both planes
+poured, DRC **0 errors, 0 warnings, 0 unconnected**, and
+`check_isolation_barrier()` clean on copper.
+
+**U4's grounding now follows the ST7580 datasheet** (DocID022644 Rev 2), read
+for this pass rather than assumed:
+
+- **C11 decouples VCC to VSS, not GND.** Figure 8 draws VCC's capacitor to
+  VSS, and "all supply voltages must be properly filtered to their respective
+  ground". C11 went to GND, which put the PA's supply loop — up to 1 A,
+  I(PA_OUT)MAX — through FB1, the ferrite Figure 9 puts between VSS and GND.
+  Every other supply capacitor already matched Figure 8.
+- **The exposed pad's thermal vias land on copper.** Table 2: the pad is
+  "electrically connected to VSSA" and should be "thermally connected to a
+  copper ground plane"; Table 5's 50 °C/W is "mounted on a 2-side + vias PCB
+  with a ground dissipating area on the bottom side". The plane under it is
+  GND, so its sixteen vias were cut out of it and DRC called them dangling.
+  The pour step now adds a VSSA island under the pad, inside U4's pin ring,
+  on In1.Cu (37 mm²) and B.Cu (28 mm², less where escape routes cross).
+- **Tying the pad to GND directly would have been wrong.** Figure 9 joins the
+  exposed pad, VSSA and VSS, and reaches GND only through a ferrite bead —
+  which is what the schematic already did.
+- **FB1 carries the PA's DC return** (the 12V boost is GND-referenced), so
+  `hardware/bom.md` now asks for ≥1.5 A and low DC resistance.
+
+Also: `route.sh` bounds Freerouting with `FREEROUTING_TIMEOUT` (300 s) and
+treats a run that writes no session as a failed attempt. The same DSN that
+finished in 17 s on one run sat for ten minutes on the next, and the import
+of nothing used to hand all 172 nets to the repair router.
 
 REV 0.6 reported every run ending "one connection short". That was wrong, and
 the reason it was wrong is the first thing this pass found:
@@ -100,7 +125,9 @@ attempts differ — Freerouting is not deterministic — and earlier runs with
 only some of these changes needed several. This was produced with KiCad 9.0.3
 and Freerouting 2.2.4 on Java 25; KiCad 9.0.3 reproduces the REV 0.6 placement
 exactly (same parts, nets, vias and zones), and reports 475 ERC warnings, 0
-errors, on the unchanged schematic where REV 0.6 quoted 350.
+errors, on the REV 0.6 schematic where REV 0.6 quoted 350 — a version
+difference, the same count either side of a regeneration. With C11 moved to
+VSS it reports 473 warnings, 0 errors.
 
 What changed in REV 0.6
 ------------------------
@@ -653,14 +680,14 @@ What's not done yet
   checks rules rather than judgement, and the analog section around U4 (the
   Rx tank, the Sallen-Key cell, `VSSA`) deserves a human pass on loop areas
   before fabrication.
-- **U4's exposed-pad thermal vias land on nothing.** The exposed pad is
-  `/ST_VSSA`, the ST7580's analog-ground island, bridged to GND through FB1
-  — but the inner plane is GND, so the sixteen 0.3mm vias in the pad are cut
-  out of it and carry heat only into whatever `/ST_VSSA` copper happens to be
-  on B.Cu. DRC flags two of them as dangling. AN4068's 50 °C/W assumes the
-  pad is tied to a ground plane. Either a `VSSA` pour on B.Cu under U4 or a
-  decision that the pad goes to GND directly would settle it; it is a design
-  question, not a routing one.
+- ~~**U4's exposed-pad thermal vias land on nothing.**~~ Closed in REV 0.7:
+  VSSA islands under the pad on In1.Cu and B.Cu (see above). Whether 37 mm²
+  inside the pin ring dissipates as well as the datasheet's "ground
+  dissipating area on the bottom side" is not established — that area's
+  size is not given — and wants a thermal check on the prototype under
+  sustained transmit.
+- **`FB1`'s part.** The BOM now states the requirement (≥1.5 A, low DCR),
+  but no part is chosen.
 - **The escape rule against the fab's numbers.** 0.15mm/0.15mm inside
   `U4_ESCAPE` is well inside JLCPCB's standard four-layer process (0.09mm),
   but confirm it against whichever house actually builds the board.
