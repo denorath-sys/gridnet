@@ -57,6 +57,8 @@ VIA_DRILL = 0.3
 BOARD_MARGIN = 0.5  # mm kept clear of the board outline
 VIA_COST = 12       # in cells, to keep the router from stitching gratuitously
 MAX_REPAIRS = 60    # rounds, each one DRC check plus one attempted repair
+MAX_CHAIN_PADS = 6  # a rip-up neighbour with more pads is cut locally, not re-routed
+SOFT_COST = 8       # per cell, for crossing another net's liftable copper
 
 
 Cell = Tuple[int, int, int]  # (x index, y index, layer index 0=F.Cu 1=B.Cu)
@@ -259,7 +261,7 @@ class Grid:
         return any(left <= r and right >= l and top <= b and bottom >= t
                    for l, t, r, b in self.escape_rects)
 
-    def build(self, net_code: int) -> Tuple[List["np.ndarray"], List["np.ndarray"]]:
+    def build(self, net_code: int, skip=None) -> Tuple[List["np.ndarray"], List["np.ndarray"]]:
         """Return (blocked-for-track, blocked-for-via) grids.
 
         Copper already on the net being routed is not an obstacle -- the
@@ -293,7 +295,7 @@ class Grid:
             pos_a = (item.GetStart().x / 1e6, item.GetStart().y / 1e6)
             pos_b = (item.GetEnd().x / 1e6, item.GetEnd().y / 1e6)
             half = (item.GetWidth(pcbnew.F_Cu) if is_via else item.GetWidth()) / 2e6
-            if item.GetNetCode() == net_code:
+            if item.GetNetCode() == net_code or (skip is not None and skip(item)):
                 continue
             if not is_via and item.GetLayer() not in LAYERS:
                 # Copper on an inner plane layer. This router only lays track
@@ -383,7 +385,7 @@ class Grid:
 
         return blocked, via_blocked
 
-    def simplify(self, path: List[Cell], blocked: List["np.ndarray"], goals) -> List[Cell]:
+    def simplify(self, path: List[Cell], blocked: List["np.ndarray"], goals, allowed=frozenset()) -> List[Cell]:
         """Pull the staircase straight.
 
         A* on a four-neighbour grid can only step along the axes, so a route
@@ -410,7 +412,7 @@ class Grid:
                 t = i / steps if steps else 0.0
                 x = int(round(a[0] + (b[0] - a[0]) * t))
                 y = int(round(a[1] + (b[1] - a[1]) * t))
-                if blocked[layer][x, y] and (x, y, layer) not in goals:
+                if blocked[layer][x, y] and (x, y, layer) not in goals and (x, y, layer) not in allowed:
                     return False
             return True
 
@@ -433,8 +435,17 @@ class Grid:
         target: Tuple[float, float],
         target_layers: Sequence[int],
         net_code: int,
+        liftable=None,
     ) -> Optional[List[Cell]]:
+        """A* from start to target. With `liftable`, copper it accepts is soft:
+        passable at SOFT_COST per cell instead of blocked (see lift_route())."""
         blocked, via_blocked = self.build(net_code)
+        soft = soft_via = None
+        if liftable is not None:
+            full, full_via = blocked, via_blocked
+            blocked, via_blocked = self.build(net_code, skip=liftable)
+            soft = [f & ~h for f, h in zip(full, blocked)]
+            soft_via = [f & ~h for f, h in zip(full_via, via_blocked)]
         sx, sy = int(round(start[0] / GRID)), int(round(start[1] / GRID))
         tx, ty = int(round(target[0] / GRID)), int(round(target[1] / GRID))
         if not (0 <= sx < self.nx and 0 <= sy < self.ny):
@@ -471,7 +482,14 @@ class Grid:
                 while node is not None:
                     path.append(node)
                     node = prev[node]
-                return self.simplify(list(reversed(path)), blocked, goals)
+                path.reverse()
+                if soft is None:
+                    return self.simplify(path, blocked, goals)
+                # Straighten without wandering into soft copper the search
+                # did not choose to cross: every extra crossing is another
+                # segment lifted.
+                full = [b | sft for b, sft in zip(blocked, soft)]
+                return self.simplify(path, full, goals, allowed=frozenset(path))
 
             base = dist[cell]
             neighbours = (
@@ -486,8 +504,12 @@ class Grid:
                 if step == VIA_COST:
                     if via_blocked[0][nx_, ny_] or via_blocked[1][nx_, ny_]:
                         continue
+                    if soft_via is not None and (soft_via[0][nx_, ny_] or soft_via[1][nx_, ny_]):
+                        step += SOFT_COST * 4
                 elif blocked[nl][nx_, ny_] and nb not in goals:
                     continue
+                elif soft is not None and soft[nl][nx_, ny_] and nb not in goals:
+                    step += SOFT_COST
                 nd = base + step
                 if nd < dist.get(nb, INF):
                     dist[nb] = nd
@@ -580,6 +602,16 @@ def rip_up_and_reroute(
     """
     victims = [net.GetNetCode()]
     local_only: List["pcbnew.PCB_TRACK"] = []
+    # Pads per net, for telling a signal (re-routable as a pad chain) from a
+    # sprawling ground-like net that is not. /ST_VSSA -- the ST7580's analog
+    # ground, with the exposed pad and every analog decoupling cap on it --
+    # was the neighbour that could not be put back in rip-up after rip-up
+    # around U4. Nets that large are treated like the planes: only their
+    # local copper comes up, and the cut ends are repaired as gaps.
+    pad_count: Dict[int, int] = {}
+    for footprint in board.GetFootprints():
+        for pad in footprint.Pads():
+            pad_count[pad.GetNetCode()] = pad_count.get(pad.GetNetCode(), 0) + 1
     if near is not None:
         for item in board.GetTracks():
             code = item.GetNetCode()
@@ -587,7 +619,7 @@ def rip_up_and_reroute(
                 continue
             if segment_distance(item, near) > radius:
                 continue
-            if board.FindNet(code).GetNetname() in PLANE_NETS:
+            if board.FindNet(code).GetNetname() in PLANE_NETS or pad_count.get(code, 0) > MAX_CHAIN_PADS:
                 local_only.append(item)
             else:
                 victims.append(code)
@@ -958,6 +990,85 @@ def via_in_island(board: "pcbnew.BOARD", grid: "Grid", net: "pcbnew.NETINFO_ITEM
     return False
 
 
+def lift_route(
+    board: "pcbnew.BOARD",
+    grid: "Grid",
+    net: "pcbnew.NETINFO_ITEM",
+    start: Tuple[float, float],
+    start_layers: Sequence[int],
+    target: Tuple[float, float],
+    target_layers: Sequence[int],
+) -> bool:
+    """Route through other nets' copper, then lift only what the route crosses.
+
+    The neighbourhood rip-up re-routes every neighbour from scratch as a pad
+    chain, and around U4 that kept failing on the one neighbour that could
+    not get back in -- /ST_VSSA, then /ST_RESETN -- after the stranded net
+    itself had routed. Here the search treats other nets' unlocked copper as
+    passable at a cost, so it finds the route that crosses as little of it as
+    it can; exactly the segments that route comes within clearance of are
+    lifted, and their cut ends become ordinary gaps for the next rounds. Pads,
+    locked copper, keepouts and the board edge stay hard.
+    """
+    code = net.GetNetCode()
+
+    def liftable(item) -> bool:
+        return not item.IsLocked() and item.GetNetCode() not in (0, code)
+
+    path = grid.route(start, start_layers, target, target_layers, code, liftable=liftable)
+    if path is None:
+        return False
+    width, clearance = grid.rules_for(code)
+    legs = [(a, b) for a, b in zip(path, path[1:]) if a[2] == b[2] and a[:2] != b[:2]]
+    vias = [b for a, b in zip(path, path[1:]) if a[2] != b[2]]
+
+    def pt(cell: Cell) -> Tuple[float, float]:
+        return cell[0] * GRID, cell[1] * GRID
+
+    def dist_to_leg(p: Tuple[float, float], a: Cell, b: Cell) -> float:
+        (ax, ay), (bx, by) = pt(a), pt(b)
+        ex, ey = bx - ax, by - ay
+        length_sq = ex * ex + ey * ey
+        t = 0.0 if length_sq == 0 else max(0.0, min(1.0, ((p[0] - ax) * ex + (p[1] - ay) * ey) / length_sq))
+        return math.hypot(p[0] - (ax + t * ex), p[1] - (ay + t * ey))
+
+    lifted = []
+    for item in board.GetTracks():
+        if not liftable(item):
+            continue
+        is_via = isinstance(item, pcbnew.PCB_VIA)
+        half = (item.GetWidth(pcbnew.F_Cu) if is_via else item.GetWidth()) / 2e6
+        layers = [0, 1] if is_via else ([LAYERS.index(item.GetLayer())] if item.GetLayer() in LAYERS else [])
+        if not layers:
+            continue
+        sx, sy = item.GetStart().x / 1e6, item.GetStart().y / 1e6
+        ex, ey = item.GetEnd().x / 1e6, item.GetEnd().y / 1e6
+        steps = max(1, int(math.hypot(ex - sx, ey - sy) / GRID))
+        samples = [(sx + (ex - sx) * i / steps, sy + (ey - sy) * i / steps) for i in range(steps + 1)]
+        rect = (min(sx, ex) - half, min(sy, ey) - half, max(sx, ex) + half, max(sy, ey) + half)
+        clr = min(clearance, ESCAPE_CLEARANCE) if grid.in_escape(rect) else clearance
+        hit = False
+        for a, b in legs:
+            if a[2] in layers and any(dist_to_leg(p, a, b) < half + clr + width / 2 - EPSILON for p in samples):
+                hit = True
+                break
+        if not hit:
+            for v in vias:
+                if any(math.hypot(p[0] - v[0] * GRID, p[1] - v[1] * GRID) < half + clr + VIA_DIAMETER / 2 - EPSILON
+                       for p in samples):
+                    hit = True
+                    break
+        if hit:
+            lifted.append(item)
+    for item in lifted:
+        board.Remove(item)
+    added = path_to_tracks(board, grid, path, net)
+    names = sorted({item.GetNetname() for item in lifted})
+    print(f"finished {net.GetNetname()} through other copper: {added} segments/vias, "
+          f"lifting {len(lifted)} segment(s) of {', '.join(names) or 'nothing'}")
+    return True
+
+
 def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -> Optional[str]:
     """Fix a single unconnected pair. Returns an error string, or None on success."""
     x1, y1, x2, y2 = pair
@@ -1046,6 +1157,15 @@ def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -
     # end, up to 59mm away, and found nothing worth moving.
     if rip_up_and_reroute(board, grid, net):
         return None
+    # A planed net's gap is better closed by a via to its plane than by a
+    # track forced through someone else's copper; try that first for those.
+    if net.GetNetname() in PLANE_NETS:
+        for origin, layers in sorted([((x1, y1), start_layers), ((x2, y2), target_layers)],
+                                     key=lambda e: not is_pad(*e[0])):
+            if drop_via_to_plane(board, grid, net, origin, layers):
+                return None
+    if lift_route(board, grid, net, (x1, y1), start_layers, (x2, y2), target_layers):
+        return None
     ends_by_pad = sorted([(x1, y1), (x2, y2)], key=lambda e: not is_pad(*e))
     for end in ends_by_pad:
         if rip_up_and_reroute(board, grid, net, near=end):
@@ -1102,6 +1222,77 @@ def strip_edge_violations(board: "pcbnew.BOARD") -> int:
         # which has no destructor for it -- see save_refilled().
         board.Delete(item)
     return len(doomed)
+
+
+def drc_report(board_path: str) -> dict:
+    with tempfile.NamedTemporaryFile(suffix=".json") as report:
+        subprocess.run(
+            ["kicad-cli", "pcb", "drc", board_path, "--format", "json",
+             "--severity-all", "-o", report.name],
+            check=True, capture_output=True,
+        )
+        return json.load(open(report.name, encoding="utf-8"))
+
+
+def cleanup_targets(report: dict, locked: set) -> List[str]:
+    """UUIDs of leftover copper to delete: what repair and lifting leave behind.
+
+    - track_dangling / via_dangling: a stub with a free end. Lifting cuts
+      tracks, and the re-route does not always come back along the old path.
+    - holes_co_located: the same via placed more than once at one point.
+    - hole_to_hole between two vias of one net: Freerouting likes to drop its
+      own via 0.05mm from a locked fanout via. The copper overlaps, so the
+      spare via adds nothing but a drill hit.
+    Locked items are never targets: build_pcb.py placed them on purpose. That
+    includes U4's exposed-pad thermal vias, which DRC calls dangling because
+    /ST_VSSA has no copper on the far side for them to land on.
+    """
+    doomed = []
+    for violation in report.get("violations", []):
+        kind = violation["type"]
+        items = violation.get("items", [])
+        uuids = [i["uuid"] for i in items]
+        if kind in ("track_dangling", "via_dangling"):
+            doomed += [u for u in uuids if u not in locked]
+        elif kind in ("holes_co_located", "hole_to_hole") and len(items) == 2:
+            nets = [i["description"].split("[", 1)[-1].split("]", 1)[0] for i in items]
+            if nets[0] != nets[1] or not all(i["description"].startswith("Via") for i in items):
+                continue
+            spare = [u for u in uuids if u not in locked]
+            if len(spare) == 2:
+                spare = spare[1:]  # two unlocked duplicates: keep one
+            doomed += spare
+    return sorted(set(doomed))
+
+
+def step_delete(uuids: Sequence[str]) -> None:
+    board = pcbnew.LoadBoard(BOARD_PATH)
+    wanted = set(uuids)
+    for item in list(board.GetTracks()):
+        if item.m_Uuid.AsString() in wanted and not item.IsLocked():
+            board.Delete(item)
+    save_refilled(board, BOARD_PATH)
+
+
+def cleanup() -> None:
+    """Delete leftover copper until a DRC pass finds none."""
+    removed = 0
+    for _pass in range(20):
+        locked_out = subprocess.run(
+            [sys.executable, "-c",
+             "import sys, pcbnew\n"
+             "b = pcbnew.LoadBoard(sys.argv[1])\n"
+             "print('\\n'.join(t.m_Uuid.AsString() for t in b.GetTracks() if t.IsLocked()))\n",
+             BOARD_PATH],
+            check=True, capture_output=True, text=True,
+        ).stdout
+        targets = cleanup_targets(drc_report(BOARD_PATH), set(locked_out.split()))
+        if not targets:
+            break
+        if run_step("--delete", *targets).returncode != 0:
+            sys.exit("cleanup step failed")
+        removed += len(targets)
+    print(f"cleanup: removed {removed} leftover track/via item(s)")
 
 
 def run_step(*args: str) -> subprocess.CompletedProcess:
@@ -1162,6 +1353,13 @@ def main() -> None:
     for _round in range(MAX_REPAIRS):
         pairs = drc_unconnected(BOARD_PATH)
         if not pairs:
+            # Cleanup deletes only stubs and duplicates, which should never
+            # disconnect anything -- but that is checked, not assumed: if it
+            # did, the loop simply carries on repairing.
+            cleanup()
+            if drc_unconnected(BOARD_PATH):
+                print("cleanup reopened a gap; repairing again")
+                continue
             print("routing complete -- DRC reports no unconnected items")
             return
         pair = next((p for p in pairs if p not in failed), None)
@@ -1201,6 +1399,8 @@ def main() -> None:
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--strip"]:
         step_strip()
+    elif sys.argv[1:2] == ["--delete"]:
+        step_delete(sys.argv[2:])
     elif sys.argv[1:2] == ["--repair"]:
         step_repair(tuple(float(v) for v in sys.argv[2:6]))
     else:

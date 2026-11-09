@@ -269,6 +269,11 @@ REFERENCE_OFFSETS: Dict[str, Tuple[float, float]] = {
     # U2 sits hard against the right edge so its antenna can, and its refdes
     # text lands off the board there. Pulled back inboard.
     "U2": (-5.5, 11.5),
+    # R6 sits 2mm from the top edge now (see PLACEMENT), so its refdes goes
+    # below it rather than off the board; C15's, below it by default, landed
+    # on L2's.
+    "R6": (0.0, 2.9),
+    "C15": (0.0, -2.86),
 }
 
 # Ground pour / stitching geometry
