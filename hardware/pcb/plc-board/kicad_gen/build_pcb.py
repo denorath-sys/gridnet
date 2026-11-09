@@ -41,6 +41,7 @@ Regenerate the netlist this script reads with:
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
@@ -553,46 +554,124 @@ def add_power_fanout(board: "pcbnew.BOARD", nets: Dict[str, "pcbnew.NETINFO_ITEM
         return all((x - hx) ** 2 + (y - hy) ** 2 >= (need + hd / 2) ** 2
                    for hx, hy, hd in holes)
 
+    # Fanouts already placed, as (net, stub start, via centre). Checked by
+    # real distance, not by the pad-obstacle boxes above: those are squares
+    # 1.1mm across, so two of them demanded 1.1mm between vias that need
+    # 0.8mm (two radii and a clearance), and that alone kept pin 45's GND via
+    # and the 42-44 +5V via, 1.0mm apart, from both existing. The stubs are
+    # checked too, which the boxes never did: a stub running past another
+    # net's via is as much a clearance error as two vias touching.
+    fanouts: List[Tuple[str, "pcbnew.VECTOR2I", "pcbnew.VECTOR2I"]] = []
+    via_gap = VIA_DIAMETER + 0.2            # via to via, centre to centre
+    stub_gap = VIA_DIAMETER / 2 + 0.2 + 0.1  # via centre to a 0.2mm stub
+
+    def seg_dist_mm(p: "pcbnew.VECTOR2I", a: "pcbnew.VECTOR2I", b: "pcbnew.VECTOR2I") -> float:
+        ax, ay, bx, by, px, py = a.x / 1e6, a.y / 1e6, b.x / 1e6, b.y / 1e6, p.x / 1e6, p.y / 1e6
+        ex, ey = bx - ax, by - ay
+        length_sq = ex * ex + ey * ey
+        t = 0.0 if length_sq == 0 else max(0.0, min(1.0, ((px - ax) * ex + (py - ay) * ey) / length_sq))
+        return math.hypot(px - (ax + t * ex), py - (ay + t * ey))
+
+    def fanout_clear(name: str, start: "pcbnew.VECTOR2I", via: "pcbnew.VECTOR2I") -> bool:
+        for other, o_start, o_via in fanouts:
+            if other == name:
+                continue
+            if math.hypot((via.x - o_via.x) / 1e6, (via.y - o_via.y) / 1e6) < via_gap:
+                return False
+            if seg_dist_mm(o_via, start, via) < stub_gap or seg_dist_mm(via, o_start, o_via) < stub_gap:
+                return False
+        return True
+
+    def add_track(net_name: str, a: "pcbnew.VECTOR2I", b: "pcbnew.VECTOR2I") -> None:
+        track = pcbnew.PCB_TRACK(board)
+        track.SetStart(a)
+        track.SetEnd(b)
+        track.SetWidth(mm(0.2))
+        track.SetLayer(pcbnew.F_Cu)
+        track.SetNet(nets[net_name])
+        board.Add(track)
+
     placed = 0
     for ref in FANOUT_PARTS:
         fp = board.FindFootprintByReference(ref)
         if fp is None:
             raise SystemExit(f"{ref} not placed -- cannot fan out its power pins")
         centre = fp.GetPosition()
+
+        # Group pads by package edge, then into runs of adjacent pads on the
+        # same net. One via per run, not one per pad.
+        #
+        # One per pad built a wall. A via 1.6mm out on a pad's own row blocks
+        # both neighbouring rows for 1.2mm (via radius, clearance, half a
+        # track), and on U4's right edge the power pads interleave with
+        # signals: 48 47 +5V, 46 VDD_B, 45 GND, 44 43 42 +5V, 41 PLC_LED,
+        # 40 BR0, 39 BR1. Every signal there had a fanout via across its only
+        # way out, and every REV 0.6 run ended on one of them -- pins 39, 40,
+        # 41 and 46, with the top and bottom edges' 4, 9, 23 and 27 not far
+        # behind. A run of same-net pads bridged along the edge and stitched
+        # once from its middle puts the via at least 0.75mm from any other
+        # net's row, which is clear of it.
+        edges: Dict[Tuple[int, int], List["pcbnew.PAD"]] = {}
         for pad in fp.Pads():
-            name = pad.GetNetname()
-            if name not in planed or pad.GetAttribute() != pcbnew.PAD_ATTRIB_SMD:
+            if pad.GetAttribute() != pcbnew.PAD_ATTRIB_SMD or not pad.GetNumber():
                 continue
             pos = pad.GetPosition()
             dx, dy = pos.x - centre.x, pos.y - centre.y
             # Straight out from the package, along whichever axis the pad's
             # own edge faces.
             if abs(dx) > abs(dy):
-                step = (mm(1.0) if dx > 0 else mm(-1.0), 0)
+                step = (1 if dx > 0 else -1, 0)
             else:
-                step = (0, mm(1.0) if dy > 0 else mm(-1.0))
-            for distance in (1.6, 2.0, 2.4, 2.8):
-                vx = pos.x + int(step[0] * distance)
-                vy = pos.y + int(step[1] * distance)
-                spot = pcbnew.BOX2I(pcbnew.VECTOR2I(vx - clear, vy - clear),
-                                    pcbnew.VECTOR2I(2 * clear, 2 * clear))
-                if any(box.Intersects(spot) and net != name for box, net in obstacles):
+                step = (0, 1 if dy > 0 else -1)
+            edges.setdefault(step, []).append(pad)
+
+        for step, edge_pads in edges.items():
+            along = (lambda p: p.GetPosition().y) if step[0] else (lambda p: p.GetPosition().x)
+            edge_pads.sort(key=along)
+            runs: List[List["pcbnew.PAD"]] = []
+            for pad in edge_pads:
+                if (runs and runs[-1][-1].GetNetname() == pad.GetNetname()
+                        and along(pad) - along(runs[-1][-1]) <= mm(0.55)):
+                    runs[-1].append(pad)
+                else:
+                    runs.append([pad])
+
+            for run in runs:
+                name = run[0].GetNetname()
+                if name not in planed:
                     continue
-                if not hole_clear(vx, vy):
-                    continue
-                make_via(board, nets[name], vx, vy)
-                holes.append((vx, vy, mm(VIA_DRILL)))
-                track = pcbnew.PCB_TRACK(board)
-                track.SetStart(pos)
-                track.SetEnd(pcbnew.VECTOR2I(vx, vy))
-                track.SetWidth(mm(0.2))
-                track.SetLayer(pcbnew.F_Cu)
-                track.SetNet(nets[name])
-                board.Add(track)
-                obstacles.append((pcbnew.BOX2I(pcbnew.VECTOR2I(vx - clear, vy - clear),
-                                               pcbnew.VECTOR2I(2 * clear, 2 * clear)), name))
-                placed += 1
-                break
+                first, last = run[0].GetPosition(), run[-1].GetPosition()
+                # The stub leaves from the middle of the run: a pad centre for
+                # an odd run, the bridge between the two middle pads for an
+                # even one.
+                origin = pcbnew.VECTOR2I((first.x + last.x) // 2, (first.y + last.y) // 2)
+                for distance in (1.6, 2.0, 2.4, 2.8):
+                    vx = origin.x + int(step[0] * mm(distance))
+                    vy = origin.y + int(step[1] * mm(distance))
+                    spot = pcbnew.BOX2I(pcbnew.VECTOR2I(vx - clear, vy - clear),
+                                        pcbnew.VECTOR2I(2 * clear, 2 * clear))
+                    if any(box.Intersects(spot) and net != name for box, net in obstacles):
+                        continue
+                    if not hole_clear(vx, vy):
+                        continue
+                    if not fanout_clear(name, origin, pcbnew.VECTOR2I(vx, vy)):
+                        continue
+                    make_via(board, nets[name], vx, vy)
+                    holes.append((vx, vy, mm(VIA_DRILL)))
+                    if len(run) > 1:
+                        add_track(name, first, last)
+                    add_track(name, origin, pcbnew.VECTOR2I(vx, vy))
+                    fanouts.append((name, origin, pcbnew.VECTOR2I(vx, vy)))
+                    placed += 1
+                    break
+                else:
+                    # Not fatal -- the router can still reach the plane from
+                    # here -- but no longer silent. Three of U4's thirteen
+                    # power pads used to go without a fanout and nothing said
+                    # so; pin 45 then came back from routing as a GND pad
+                    # joined to nothing but a 1.8mm2 sliver of F.Cu pour.
+                    pins = ",".join(p.GetNumber() for p in run)
+                    print(f"note: no fanout site for {ref} pin(s) {pins} ({name}); left to the router")
     return placed
 
 

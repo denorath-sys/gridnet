@@ -56,6 +56,7 @@ VIA_DIAMETER = 0.6
 VIA_DRILL = 0.3
 BOARD_MARGIN = 0.5  # mm kept clear of the board outline
 VIA_COST = 12       # in cells, to keep the router from stitching gratuitously
+MAX_REPAIRS = 60    # rounds, each one DRC check plus one attempted repair
 
 
 Cell = Tuple[int, int, int]  # (x index, y index, layer index 0=F.Cu 1=B.Cu)
@@ -66,13 +67,45 @@ LAYERS = (pcbnew.F_Cu, pcbnew.B_Cu)
 # NETINFO_ITEM.GetNetClass() as a bare SwigPyObject with no accessors, so the
 # rules cannot be read back off the board; importing the source of truth is
 # both simpler and harder to get out of step.
-from build_pcb import NETCLASSES  # noqa: E402
+from build_pcb import NETCLASSES, PLANES  # noqa: E402
 
 NET_RULES = {
     net: (width, clearance)
     for _name, (width, clearance, nets) in NETCLASSES.items()
     for net in nets
 }
+
+PLANE_NETS = {name for name, _layer in PLANES}
+
+
+def segment_distance(item: "pcbnew.PCB_TRACK", point: Tuple[float, float]) -> float:
+    """Distance in mm from `point` to a track's centreline (or a via's centre).
+
+    Not to its endpoints. A long track running straight past a stranded pad
+    has both ends far away and is exactly as much in the way.
+    """
+    ax, ay = item.GetStart().x / 1e6, item.GetStart().y / 1e6
+    bx, by = item.GetEnd().x / 1e6, item.GetEnd().y / 1e6
+    ex, ey = bx - ax, by - ay
+    length_sq = ex * ex + ey * ey
+    t = 0.0 if length_sq == 0 else max(0.0, min(1.0, ((point[0] - ax) * ex + (point[1] - ay) * ey) / length_sq))
+    return math.hypot(point[0] - (ax + t * ex), point[1] - (ay + t * ey))
+
+
+def refill_zones(board: "pcbnew.BOARD") -> None:
+    """Re-pour every copper zone around whatever copper is on the board now.
+
+    The pour runs *before* repair (see route.sh), so every track this script
+    lays goes down on top of an existing GND fill, and the router does not
+    treat that fill as an obstacle -- it is about to be recomputed, and the
+    refill is what carves clearance around the new copper. Until then the
+    stale fill overlaps it, which is a short as far as DRC is concerned. So
+    the refill happens after every repair, before the board is saved and
+    before DRC is asked what is still unconnected: a refill can strand a
+    piece of pour as easily as it frees one.
+    """
+    zones = [z for z in board.Zones() if not z.GetIsRuleArea()]
+    pcbnew.ZONE_FILLER(board).Fill(zones)
 
 
 def drc_unconnected(board_path: str) -> List[Tuple[float, float, float, float]]:
@@ -440,19 +473,32 @@ def rip_up_and_reroute(
     help, because what is in its way belongs to its neighbour. Everything with
     copper near the stranded pad comes up together, the stranded net is routed
     first, and the rest are put back afterwards.
+
+    Planed nets are the exception. On this board the copper in a stranded
+    pad's way is as often GND or +5V as a signal -- /PLC_LED on U4's pin 41
+    was walled in by a GND via Freerouting put 1mm from the pad -- and
+    re-routing GND "from scratch" as a pad chain would mean threading a track
+    through every ground pad on the board. So a planed neighbour loses only
+    its copper inside the neighbourhood, and is not re-routed here at all: the
+    pieces that cut off show up in the next DRC round as ordinary unconnected
+    pairs, and the plane-stitching repair below closes them with a via to
+    their own plane, which is what that copper was doing anyway.
     """
     victims = [net.GetNetCode()]
+    local_only: List["pcbnew.PCB_TRACK"] = []
     if near is not None:
         for item in board.GetTracks():
             code = item.GetNetCode()
             if code in victims or code == 0:
                 continue
-            for end in (item.GetStart(), item.GetEnd()):
-                if math.hypot(end.x / 1e6 - near[0], end.y / 1e6 - near[1]) <= radius:
-                    victims.append(code)
-                    break
+            if segment_distance(item, near) > radius:
+                continue
+            if board.FindNet(code).GetNetname() in PLANE_NETS:
+                local_only.append(item)
+            else:
+                victims.append(code)
 
-    doomed = [t for t in board.GetTracks() if t.GetNetCode() in victims]
+    doomed = [t for t in board.GetTracks() if t.GetNetCode() in victims] + local_only
     for track in doomed:
         board.Remove(track)
 
@@ -462,6 +508,8 @@ def rip_up_and_reroute(
         if route_pad_chain(board, grid, victim_net):
             routed.append(code)
             continue
+        if code != net.GetNetCode():
+            print(f"  rip-up around {near}: could not put {victim_net.GetNetname()} back; undoing")
         # Undo everything: the partial results are worse than what was there.
         for track in list(board.GetTracks()):
             if track.GetNetCode() in routed or track.GetNetCode() == code:
@@ -577,6 +625,53 @@ def drop_via_to_plane(
     return False
 
 
+def orphan_plane_pads(board: "pcbnew.BOARD") -> List[Tuple["pcbnew.NETINFO_ITEM", "pcbnew.PAD"]]:
+    """Planed-net SMD pads that reach their net through nothing but a sliver.
+
+    A pad counts as connected if a track or via of its net touches it, or if
+    the piece of pour it sits in carries a via of its net. U4's pin 45 had
+    neither: no fanout site, no track from the autorouter, and the F.Cu GND
+    pour around it was a 1.8mm2 island with no via -- which DRC reports as
+    two GND zones unconnected at the zone's corner, 20mm from the pad.
+    """
+    found = []
+    for name in PLANE_NETS:
+        net = board.FindNet(name)
+        if net is None:
+            continue
+        code = net.GetNetCode()
+        copper = [t for t in board.GetTracks() if t.GetNetCode() == code]
+        vias = [t.GetPosition() for t in copper if isinstance(t, pcbnew.PCB_VIA)]
+        fills = []
+        for zone in board.Zones():
+            if zone.GetIsRuleArea() or zone.GetNetCode() != code:
+                continue
+            for layer in LAYERS:
+                if zone.IsOnLayer(layer):
+                    fills.append((layer, zone.GetFilledPolysList(layer)))
+        for footprint in board.GetFootprints():
+            for pad in footprint.Pads():
+                if pad.GetNetCode() != code or pad.GetAttribute() != pcbnew.PAD_ATTRIB_SMD:
+                    continue
+                if any(pad.HitTest(t.GetStart()) or pad.HitTest(t.GetEnd()) for t in copper):
+                    continue
+                pos = pad.GetPosition()
+                fed = False
+                for layer, polys in fills:
+                    if not pad.IsOnLayer(layer):
+                        continue
+                    for i in range(polys.OutlineCount()):
+                        island = pcbnew.SHAPE_POLY_SET()
+                        island.AddOutline(polys.Outline(i))
+                        if island.Contains(pos) or island.Collide(pos, pcbnew.FromMM(0.2)):
+                            if any(island.Contains(v) for v in vias):
+                                fed = True
+                            break
+                if not fed:
+                    found.append((net, pad))
+    return found
+
+
 def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -> Optional[str]:
     """Fix a single unconnected pair. Returns an error string, or None on success."""
     x1, y1, x2, y2 = pair
@@ -623,6 +718,15 @@ def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -
     start = endpoint(x1, y1)
     target = endpoint(x2, y2)
     if start is None or target is None:
+        # Two zones, not a pad or a track: almost always a planed-net pad
+        # that nothing reached, sitting on its own sliver of pour. KiCad
+        # names the zones and puts both ends on the zone's corner, so the
+        # pad has to be found rather than read off the report.
+        for orphan_net, pad in orphan_plane_pads(board):
+            layers = [i for i, layer in enumerate(LAYERS) if pad.IsOnLayer(layer)] or [0]
+            origin = (pad.GetPosition().x / 1e6, pad.GetPosition().y / 1e6)
+            if drop_via_to_plane(board, grid, orphan_net, origin, layers):
+                return None
         return f"({x1:.2f},{y1:.2f}) -> ({x2:.2f},{y2:.2f}): could not identify both ends"
     net_code, start_layers = start
     _target_net, target_layers = target
@@ -643,8 +747,19 @@ def repair_one(board: "pcbnew.BOARD", pair: Tuple[float, float, float, float]) -
     # needed. That copper is not an obstacle to *this* search (same net), but
     # the commitment is already made. So throw it away and start over: this
     # net alone first, then this net together with its neighbours.
-    if rip_up_and_reroute(board, grid, net) or rip_up_and_reroute(board, grid, net, near=(x2, y2)):
+    #
+    # The neighbourhood is searched around *each* end, pad first. It used to
+    # be (x2, y2) only, and DRC does not promise which end of a pair is the
+    # stranded one: every run of REV 0.6 ended with the stranded end first --
+    # U4's pin 39 (/ST_BR1) and pin 41 (/PLC_LED), each walled in on the
+    # QFN's right edge -- while the neighbourhood search looked at the other
+    # end, up to 59mm away, and found nothing worth moving.
+    if rip_up_and_reroute(board, grid, net):
         return None
+    ends_by_pad = sorted([(x1, y1), (x2, y2)], key=lambda e: not is_pad(*e))
+    for end in ends_by_pad:
+        if rip_up_and_reroute(board, grid, net, near=end):
+            return None
 
     # Last resort, and on a board with power planes the *correct* answer more
     # often than the ones above: a pad on a planed net does not need a track to
@@ -674,24 +789,45 @@ def main() -> None:
     # the board -- a rip-up can complete several connections at once, or move
     # where the remaining gap is -- so a list of pairs collected up front goes
     # stale after the first fix and produces phantom failures.
-    attempted: set = set()
-    while True:
+    #
+    # A pair that cannot be repaired is set aside, not fatal. This loop used
+    # to stop at the first one, which is why every REV 0.6 run was reported
+    # as "one connection short": that was the first pair the loop could not
+    # close, not the last pair on the board. The board behind one of those
+    # reports still had nine. Closing the others first also changes what is
+    # in the way of the hard one, so after any round that made progress the
+    # set-aside pairs get another try. Only a full pass with no progress at
+    # all is a failure, and then every remaining gap is listed.
+    #
+    # Capped, because a repair is allowed to open gaps as well as close them
+    # -- cutting a planed neighbour's copper is a deliberate example -- and a
+    # loop that only checks for progress could trade the same two gaps back
+    # and forth forever.
+    failed: Dict[Tuple[float, float, float, float], str] = {}
+    for _round in range(MAX_REPAIRS):
         pairs = drc_unconnected(BOARD_PATH)
         if not pairs:
             print("routing complete -- DRC reports no unconnected items")
             return
-        pair = next((p for p in pairs if p not in attempted), None)
+        pair = next((p for p in pairs if p not in failed), None)
         if pair is None:
-            print("could not finish:", *sorted(f"{p}" for p in pairs), sep="\n  ")
+            print(f"could not finish -- {len(pairs)} unconnected:")
+            for p in pairs:
+                print("  " + failed.get(p, f"{p}: not attempted"))
             sys.exit(1)
-        attempted.add(pair)
 
         board = pcbnew.LoadBoard(BOARD_PATH)
         error = repair_one(board, pair)
         if error:
-            print("could not finish:\n  " + error)
-            sys.exit(1)
+            print("set aside: " + error)
+            failed[pair] = error
+            continue
+        refill_zones(board)
         board.Save(BOARD_PATH)
+        # Progress: whatever was set aside may have a way through now.
+        failed.clear()
+    print(f"could not finish -- gave up after {MAX_REPAIRS} repair rounds")
+    sys.exit(1)
 
 
 if __name__ == "__main__":
