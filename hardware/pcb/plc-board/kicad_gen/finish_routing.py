@@ -517,19 +517,38 @@ def rip_up_and_reroute(
     for track in doomed:
         board.Remove(track)
 
-    routed = []
-    for code in victims:
-        victim_net = board.FindNet(code)
-        if route_pad_chain(board, grid, victim_net):
-            routed.append(code)
-            continue
-        if code != net.GetNetCode():
-            print(f"  rip-up around {near}: could not put {victim_net.GetNetname()} back; undoing")
-        # Undo everything: the partial results are worse than what was there.
+    # Order matters, and the first order tried is rarely the right one. The
+    # stranded net goes first and takes the shortest way out, which is usually
+    # straight across the neighbour it was competing with: in the first run
+    # with this loop, all four set-aside nets were routed and then lost
+    # because one neighbour (/ST_BR0, /ST_RXD, /ST_CL, /ST_RESETN) could not
+    # get back in. So a victim that fails moves to the front and the whole
+    # set is tried again, until every net has had a turn at the front or an
+    # order repeats.
+    order = list(victims)
+    tried = set()
+    while tuple(order) not in tried:
+        tried.add(tuple(order))
+        routed: List[int] = []
+        failed_code = None
+        for code in order:
+            if route_pad_chain(board, grid, board.FindNet(code)):
+                routed.append(code)
+            else:
+                failed_code = code
+                break
+        if failed_code is None:
+            break
+        # Clear this attempt's copper before the next order: partial results
+        # are worse than what was there.
         for track in list(board.GetTracks()):
-            if track.GetNetCode() in routed or track.GetNetCode() == code:
-                if track not in doomed:
-                    board.Remove(track)
+            if track.GetNetCode() in routed or track.GetNetCode() == failed_code:
+                board.Remove(track)
+        order.remove(failed_code)
+        order.insert(0, failed_code)
+    else:
+        name = board.FindNet(order[0]).GetNetname()
+        print(f"  rip-up around {near}: no order of {len(victims)} nets fits ({name} last to fail); undoing")
         for track in doomed:
             board.Add(track)
         return False
