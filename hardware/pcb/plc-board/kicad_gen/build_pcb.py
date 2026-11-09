@@ -422,6 +422,12 @@ def make_via(board: "pcbnew.BOARD", net: "pcbnew.NETINFO_ITEM", x_nm: int, y_nm:
     via.SetDrill(mm(VIA_DRILL))
     via.SetNet(net)
     via.SetLayerPair(pcbnew.F_Cu, pcbnew.B_Cu)
+    # Locked: every via made here is placed on purpose -- thermal, stitching,
+    # fanout -- and finish_routing.py's rip-up leaves locked copper alone.
+    # Without that, ripping up /ST_VSSA as a neighbour took U4's sixteen
+    # exposed-pad thermal vias with it, and re-routing the net as a pad chain
+    # would never have put them back.
+    via.SetLocked(True)
     board.Add(via)
 
 
@@ -589,6 +595,7 @@ def add_power_fanout(board: "pcbnew.BOARD", nets: Dict[str, "pcbnew.NETINFO_ITEM
         track.SetWidth(mm(0.2))
         track.SetLayer(pcbnew.F_Cu)
         track.SetNet(nets[net_name])
+        track.SetLocked(True)  # part of the fanout, like its via
         board.Add(track)
 
     placed = 0

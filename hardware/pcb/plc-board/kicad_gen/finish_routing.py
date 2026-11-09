@@ -519,7 +519,7 @@ def rip_up_and_reroute(
     if near is not None:
         for item in board.GetTracks():
             code = item.GetNetCode()
-            if code in victims or code == 0:
+            if code in victims or code == 0 or item.IsLocked():
                 continue
             if segment_distance(item, near) > radius:
                 continue
@@ -528,7 +528,10 @@ def rip_up_and_reroute(
             else:
                 victims.append(code)
 
-    doomed = [t for t in board.GetTracks() if t.GetNetCode() in victims] + local_only
+    # Locked copper stays: build_pcb.py locks what it places on purpose
+    # (thermal, stitching and fanout vias, fanout stubs), and none of it is
+    # something a pad chain would rebuild.
+    doomed = [t for t in board.GetTracks() if t.GetNetCode() in victims and not t.IsLocked()] + local_only
     for track in doomed:
         board.Remove(track)
 
@@ -557,13 +560,14 @@ def rip_up_and_reroute(
         # Clear this attempt's copper before the next order: partial results
         # are worse than what was there.
         for track in list(board.GetTracks()):
-            if track.GetNetCode() in routed or track.GetNetCode() == failed_code:
+            if (track.GetNetCode() in routed or track.GetNetCode() == failed_code) and not track.IsLocked():
                 board.Remove(track)
         order.remove(failed_code)
         order.insert(0, failed_code)
     else:
         name = board.FindNet(order[0]).GetNetname()
-        print(f"  rip-up around {near}: no order of {len(victims)} nets fits ({name} last to fail); undoing")
+        if near is not None:
+            print(f"  rip-up around ({near[0]:.2f},{near[1]:.2f}): no order of {len(victims)} nets fits ({name} last to fail); undoing")
         for track in doomed:
             board.Add(track)
         return False
@@ -855,6 +859,8 @@ def strip_edge_violations(board: "pcbnew.BOARD") -> int:
     right, bottom = outline.GetRight() / 1e6, outline.GetBottom() / 1e6
     doomed = []
     for item in board.GetTracks():
+        if item.IsLocked():
+            continue  # placed on purpose by build_pcb.py, which checks its own geometry
         is_via = isinstance(item, pcbnew.PCB_VIA)
         half = (item.GetWidth(pcbnew.F_Cu) if is_via else item.GetWidth()) / 2e6
         for end in (item.GetStart(), item.GetEnd()):
